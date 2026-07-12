@@ -1,2 +1,65 @@
-abc
-/sources
+# Private source data
+/sources/
+/data/*
+!/data/.gitkeep
+/imports/
+/exports/
+/archive/
+/archives/
+/raw_data/
+/private_data/
+
+# Chat exports and archives
+conversations.json
+chat.html
+*.zip
+*.tar
+*.tar.gz
+*.7z
+
+# Generated databases and indexes
+*.db
+*.sqlite
+*.sqlite3
+*.parquet
+*.feather
+*.pkl
+
+# Generated analysis; only placeholders belong in Git
+/output/*
+!/output/.gitkeep
+/cache/
+/.cache/
+/embeddings/
+/indexes/
+/logs/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.token
+/secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Node
+node_modules/
+dist/
+build/
+.vite/
+
+# IDE and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

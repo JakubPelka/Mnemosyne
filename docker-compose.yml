@@ -1,0 +1,13 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      MNEMOSYNE_DATABASE_PATH: /app/data/mnemosyne.sqlite3
+      MNEMOSYNE_SOURCE_DIR: /app/sources
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./sources:/app/sources:ro
