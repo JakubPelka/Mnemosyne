@@ -27,6 +27,10 @@ Planowany rdzeń bazy obejmuje: `sources`, `events`, `entities`, `topics`, `even
 
 Źródło otrzyma hash ścieżki zamiast jawnej ścieżki. Rekordy będą identyfikowane przez parę `(source_id, source_record_id)`. Ponowny import ma aktualizować istniejące rekordy w transakcji, a nie tworzyć duplikaty.
 
+Eksport pokazał, że `message_id` nie jest globalnie unikalne: ten sam identyfikator może wystąpić w różnych rozmowach. Wewnętrzny klucz wiadomości i jej zdarzenia jest więc deterministycznie wyprowadzany z pary `(conversation_id, message_id)`. Oryginalny identyfikator pozostaje zachowany jako pole źródłowe.
+
+SQLite FTS5 jest utrzymywany przez triggery powiązane z `events`. Tabele wirtualne i cieniujące FTS są celowo wyłączone z porównywania schematu Alembic.
+
 ## Decyzje odłożone do inspekcji
 
 - dokładne mapowanie drzewa wiadomości i aktywnej gałęzi;

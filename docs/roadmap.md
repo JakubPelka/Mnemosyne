@@ -37,64 +37,64 @@ Ta lista jest roboczym odzwierciedleniem wymagań z `agents.txt`. Zrealizowane z
 
 ## 2. Inspekcja pierwszego eksportu OpenAI / ChatGPT
 
-- [ ] Poczekać na pierwsze źródło w lokalnym katalogu `sources/`.
-- [ ] Obsłużyć zarówno archiwum ZIP, jak i rozpakowany katalog.
-- [ ] Nie zakładać konkretnej nazwy pliku zawierającego rozmowy.
-- [ ] Przejrzeć strukturę katalogów i plików bez modyfikowania źródła.
-- [ ] Zidentyfikować pliki zawierające rozmowy i wiadomości.
-- [ ] Ustalić format dat, identyfikatorów i typów treści.
-- [ ] Ustalić relacje rodzic–dziecko, kolejność wiadomości i znaczenie aktywnej gałęzi.
-- [ ] Zidentyfikować brakujące, nietypowe, uszkodzone i pomijane dane.
-- [ ] Uzupełnić `docs/export_format.md` bez prawdziwej treści, danych osobowych i jawnych lokalnych ścieżek.
-- [ ] Używać w raporcie wyłącznie opisów strukturalnych i syntetycznych przykładów.
+- [x] Poczekać na pierwsze źródło w lokalnym katalogu `sources/`.
+- [x] Obsłużyć zarówno archiwum ZIP, jak i rozpakowany katalog.
+- [x] Nie zakładać konkretnej nazwy pliku zawierającego rozmowy.
+- [x] Przejrzeć strukturę katalogów i plików bez modyfikowania źródła.
+- [x] Zidentyfikować pliki zawierające rozmowy i wiadomości.
+- [x] Ustalić format dat, identyfikatorów i typów treści.
+- [x] Ustalić relacje rodzic–dziecko, kolejność wiadomości i znaczenie aktywnej gałęzi.
+- [x] Zidentyfikować brakujące, nietypowe, uszkodzone i pomijane dane.
+- [x] Uzupełnić `docs/export_format.md` bez prawdziwej treści, danych osobowych i jawnych lokalnych ścieżek.
+- [x] Używać w raporcie wyłącznie opisów strukturalnych i syntetycznych przykładów.
 
 ## 3. Wspólny model danych i SQLite
 
-- [ ] Utworzyć migracje Alembic i schemat tabeli `sources`.
-- [ ] Utworzyć tabelę `events` z identyfikatorem źródłowym, czasem, tekstem, URL-em, prywatnością i lokalnym odwołaniem do surowego rekordu.
-- [ ] Utworzyć tabele `entities`, `topics`, `event_topics`, `event_entities`, `event_relations` i `import_runs`.
-- [ ] Utworzyć źródłowe tabele `chatgpt_conversations` oraz `chatgpt_messages` wskazujące odpowiadające rekordy `events`.
-- [ ] Zachować stabilne identyfikatory źródłowe.
-- [ ] Wymusić unikalność co najmniej pary `(source_id, source_record_id)`.
-- [ ] Zapisywać hash oryginalnej ścieżki zamiast jawnej ścieżki.
-- [ ] Zapewnić transakcyjny, idempotentny import bez duplikatów.
-- [ ] Przygotować aktualizację danych przy imporcie kolejnego eksportu.
-- [ ] Dodać indeksy do filtrowania po dacie, źródle i typie zdarzenia.
-- [ ] Dodać SQLite FTS5 do lokalnego wyszukiwania pełnotekstowego.
+- [x] Utworzyć migracje Alembic i schemat tabeli `sources`.
+- [x] Utworzyć tabelę `events` z identyfikatorem źródłowym, czasem, tekstem, URL-em, prywatnością i lokalnym odwołaniem do surowego rekordu.
+- [x] Utworzyć tabele `entities`, `topics`, `event_topics`, `event_entities`, `event_relations` i `import_runs`.
+- [x] Utworzyć źródłowe tabele `chatgpt_conversations` oraz `chatgpt_messages` wskazujące odpowiadające rekordy `events`.
+- [x] Zachować stabilne identyfikatory źródłowe.
+- [x] Wymusić unikalność co najmniej pary `(source_id, source_record_id)`.
+- [x] Zapisywać hash oryginalnej ścieżki zamiast jawnej ścieżki.
+- [x] Zapewnić transakcyjny, idempotentny import bez duplikatów.
+- [ ] Przygotować aktualizację danych przy imporcie kolejnego eksportu — **częściowo**: istniejące rekordy są aktualizowane, ale rekordy usunięte ze źródła nie są jeszcze oznaczane jako nieaktywne.
+- [x] Dodać indeksy do filtrowania po dacie, źródle i typie zdarzenia.
+- [x] Dodać SQLite FTS5 do lokalnego wyszukiwania pełnotekstowego.
 - [ ] Zapewnić odczyt kilku wiadomości przed i po wskazanym fragmencie.
 - [ ] Pozostawić możliwość późniejszego dodania lokalnych embeddingów bez wymagania ich w MVP.
-- [ ] Zweryfikować migracje w nowej i istniejącej bazie.
+- [ ] Zweryfikować migracje w nowej i istniejącej bazie — **częściowo**: sprawdzono utworzenie nowej bazy i brak dryfu schematu; migracja istniejącej bazy będzie możliwa od drugiej rewizji.
 
 ## 4. `ChatGPTExportAdapter`
 
-- [ ] Zaimplementować `inspect()` zwracające wyłącznie bezpieczne metadane strukturalne.
-- [ ] Zaimplementować `validate()` z czytelnymi błędami bez ujawniania treści.
-- [ ] Zaimplementować strumieniowy lub pamięciowo bezpieczny `parse()` dla ZIP-a i katalogu.
-- [ ] Zaimplementować `normalize()` mapujące rekordy ChatGPT na wspólne zdarzenia.
-- [ ] Zaimplementować `get_source_metadata()` z `source_type=chatgpt`.
-- [ ] Normalizować pola rozmowy: ID, tytuł, daty, źródło i liczbę wiadomości.
-- [ ] Normalizować pola wiadomości: ID, rozmowę, rodzica, rolę, datę, tekst, kolejność i typ treści.
-- [ ] Poprawnie odtwarzać kolejność i rozgałęzienia wiadomości.
-- [ ] Obsługiwać brakujące daty, pustą treść, nieznane typy i częściowo uszkodzone rekordy.
-- [ ] Nie modyfikować ani automatycznie nie usuwać surowego eksportu.
-- [ ] Nie umieszczać treści wiadomości w ostrzeżeniach, wyjątkach ani logach.
+- [x] Zaimplementować `inspect()` zwracające wyłącznie bezpieczne metadane strukturalne.
+- [x] Zaimplementować `validate()` z czytelnymi błędami bez ujawniania treści.
+- [x] Zaimplementować strumieniowy lub pamięciowo bezpieczny `parse()` dla ZIP-a i katalogu.
+- [x] Zaimplementować `normalize()` mapujące rekordy ChatGPT na wspólne zdarzenia.
+- [x] Zaimplementować `get_source_metadata()` z `source_type=chatgpt`.
+- [x] Normalizować pola rozmowy: ID, tytuł, daty, źródło i liczbę wiadomości.
+- [x] Normalizować pola wiadomości: ID, rozmowę, rodzica, rolę, datę, tekst, kolejność i typ treści.
+- [x] Poprawnie odtwarzać kolejność i rozgałęzienia wiadomości.
+- [x] Obsługiwać brakujące daty, pustą treść, nieznane typy i częściowo uszkodzone rekordy.
+- [x] Nie modyfikować ani automatycznie nie usuwać surowego eksportu.
+- [x] Nie umieszczać treści wiadomości w ostrzeżeniach, wyjątkach ani logach.
 
 ## 5. Syntetyczne dane i testy importu
 
 - [x] Dodać wyraźnie oznaczone miejsce na dane syntetyczne.
-- [ ] Przygotować właściwy syntetyczny eksport — **częściowo**: istnieje pusty, jawnie syntetyczny placeholder.
-- [ ] Uwzględnić kilka rozmów i różne daty.
-- [ ] Uwzględnić rozgałęzione wiadomości.
-- [ ] Uwzględnić brakujące daty i pustą treść.
-- [ ] Uwzględnić język polski, szwedzki i angielski.
-- [ ] Uwzględnić powtarzające się tematy.
-- [ ] Przetestować wykrywanie formatu i parser.
-- [ ] Przetestować kolejność oraz rozgałęzienia wiadomości.
-- [ ] Przetestować ponowny import i brak duplikatów.
-- [ ] Przetestować FTS5 oraz filtrowanie po dacie.
+- [x] Przygotować właściwy syntetyczny eksport.
+- [x] Uwzględnić kilka rozmów i różne daty.
+- [x] Uwzględnić rozgałęzione wiadomości.
+- [x] Uwzględnić brakujące daty i pustą treść.
+- [x] Uwzględnić język polski, szwedzki i angielski.
+- [x] Uwzględnić powtarzające się tematy.
+- [x] Przetestować wykrywanie formatu i parser.
+- [x] Przetestować kolejność oraz rozgałęzienia wiadomości.
+- [x] Przetestować ponowny import i brak duplikatów na danych syntetycznych oraz rzeczywistym eksporcie.
+- [x] Przetestować FTS5 oraz filtrowanie po dacie.
 - [ ] Przetestować odczyt kontekstu wokół wiadomości.
-- [ ] Przetestować, że logi i błędy nie zawierają prywatnej treści.
-- [ ] Uruchamiać testy po każdym większym kroku.
+- [x] Przetestować, że logi i błędy nie zawierają prywatnej treści.
+- [x] Uruchamiać testy po każdym większym kroku.
 
 ## 6. Lokalne wydobywanie tematów
 
@@ -154,8 +154,8 @@ Ta lista jest roboczym odzwierciedleniem wymagań z `agents.txt`. Zrealizowane z
 
 ## 10. Kryteria ukończenia MVP
 
-- [ ] Użytkownik może wskazać lokalne archiwum lub rozpakowany eksport.
-- [ ] Użytkownik może zaimportować rozmowy bez duplikatów.
+- [x] Użytkownik może wskazać lokalne archiwum lub rozpakowany eksport.
+- [x] Użytkownik może zaimportować rozmowy bez duplikatów.
 - [ ] Użytkownik może uruchomić aplikację lokalnie bez Dockera.
 - [ ] Użytkownik może uruchomić aplikację przez Docker Compose.
 - [ ] Użytkownik widzi sieć tematów.
@@ -175,9 +175,9 @@ Poniższe funkcje pozostają celowo poza pierwszą wersją: import źródeł inn
 
 ## Proponowana kolejność małych commitów
 
-- [ ] Commit 1: bezpieczny szkielet repozytorium, dokumentacja i reguły ignorowania — **zmiany przygotowane, jeszcze niezatwierdzone**.
-- [ ] Commit 2: inspektor formatu oraz raport z pierwszego eksportu bez ujawniania treści.
-- [ ] Commit 3: wspólny schemat SQLite, modele SQLAlchemy i migracje Alembic.
-- [ ] Commit 4: `ChatGPTExportAdapter`, idempotentny import i komplet danych syntetycznych.
+- [x] Commit 1: bezpieczny szkielet repozytorium, dokumentacja i reguły ignorowania.
+- [ ] Commit 2: inspektor formatu oraz raport z pierwszego eksportu bez ujawniania treści — **zmiany przygotowane, jeszcze niezatwierdzone**.
+- [ ] Commit 3: wspólny schemat SQLite, modele SQLAlchemy i migracje Alembic — **zmiany przygotowane, jeszcze niezatwierdzone**.
+- [ ] Commit 4: `ChatGPTExportAdapter`, idempotentny import i komplet danych syntetycznych — **zmiany przygotowane, jeszcze niezatwierdzone**.
 - [ ] Commit 5: FTS5, lokalne tematy i pierwszy pionowy wycinek API → graf.
 - [ ] Kolejne commity: czas, panel szczegółów, kontekst fragmentów i ergonomia grafu.

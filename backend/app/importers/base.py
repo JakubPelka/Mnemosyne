@@ -9,7 +9,9 @@ class InspectionReport:
     """Structural metadata only; it must never contain source text."""
 
     detected_format: str
+    input_kind: str
     candidate_files: tuple[str, ...]
+    file_count: int
     warnings: tuple[str, ...] = ()
 
 

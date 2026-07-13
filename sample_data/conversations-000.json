@@ -1,0 +1,136 @@
+[
+  {
+    "id": "synthetic-conversation-pl",
+    "conversation_id": "synthetic-conversation-pl",
+    "title": "Syntetyczny ogród",
+    "create_time": 1704067200.0,
+    "update_time": 1704067320.0,
+    "current_node": "pl-assistant-current",
+    "mapping": {
+      "pl-root": {
+        "id": "pl-root",
+        "message": null,
+        "parent": null
+      },
+      "pl-user": {
+        "id": "pl-user",
+        "message": {
+          "id": "pl-user",
+          "author": {"role": "user", "name": null},
+          "create_time": 1704067210.0,
+          "content": {"content_type": "text", "parts": ["Jak zaplanować ogród?"]},
+          "metadata": {}
+        },
+        "parent": "pl-root"
+      },
+      "pl-assistant-old": {
+        "id": "pl-assistant-old",
+        "message": {
+          "id": "pl-assistant-old",
+          "author": {"role": "assistant", "name": null},
+          "create_time": 1704067220.0,
+          "content": {"content_type": "text", "parts": ["Zacznij od ziół."]},
+          "metadata": {}
+        },
+        "parent": "pl-user"
+      },
+      "pl-assistant-current": {
+        "id": "pl-assistant-current",
+        "message": {
+          "id": "pl-assistant-current",
+          "author": {"role": "assistant", "name": null},
+          "create_time": 1704067230.0,
+          "content": {"content_type": "text", "parts": [""]},
+          "metadata": {}
+        },
+        "parent": "pl-user"
+      }
+    }
+  },
+  {
+    "id": "synthetic-conversation-sv",
+    "title": "Syntetisk trädgård",
+    "create_time": 1706745600.0,
+    "update_time": 1706745660.0,
+    "current_node": "sv-assistant",
+    "mapping": {
+      "sv-root": {"id": "sv-root", "message": null, "parent": null},
+      "sv-user": {
+        "id": "sv-user",
+        "message": {
+          "id": "shared-source-message-id",
+          "author": {"role": "user", "name": null},
+          "create_time": null,
+          "content": {"content_type": "text", "parts": ["Planera en liten trädgård."]},
+          "metadata": {}
+        },
+        "parent": "sv-root"
+      },
+      "sv-assistant": {
+        "id": "sv-assistant",
+        "message": {
+          "id": "sv-assistant",
+          "author": {"role": "assistant", "name": null},
+          "create_time": 1706745650.0,
+          "content": {"content_type": "text", "parts": ["Välj tåliga örter."]},
+          "metadata": {}
+        },
+        "parent": "sv-user"
+      }
+    }
+  },
+  {
+    "id": "synthetic-conversation-en",
+    "title": "Synthetic garden image",
+    "create_time": 1709251200.0,
+    "update_time": 1709251380.0,
+    "current_node": "en-recap",
+    "mapping": {
+      "en-root": {"id": "en-root", "message": null, "parent": null},
+      "en-user": {
+        "id": "en-user",
+        "message": {
+          "id": "shared-source-message-id",
+          "author": {"role": "user", "name": null},
+          "create_time": 1709251210.0,
+          "content": {
+            "content_type": "multimodal_text",
+            "parts": [
+              "Describe this synthetic garden.",
+              {"content_type": "image_asset_pointer", "asset_pointer": "synthetic-asset"}
+            ]
+          },
+          "metadata": {}
+        },
+        "parent": "en-root"
+      },
+      "en-thoughts": {
+        "id": "en-thoughts",
+        "message": {
+          "id": "en-thoughts",
+          "author": {"role": "assistant", "name": null},
+          "create_time": 1709251220.0,
+          "content": {
+            "content_type": "thoughts",
+            "source_analysis_msg_id": "synthetic-analysis",
+            "thoughts": [{"summary": "Synthetic hidden reasoning", "content": "Not indexed", "chunks": [], "finished": true}]
+          },
+          "metadata": {}
+        },
+        "parent": "en-user"
+      },
+      "en-recap": {
+        "id": "en-recap",
+        "message": {
+          "id": "en-recap",
+          "author": {"role": "assistant", "name": null},
+          "create_time": 1709251230.0,
+          "content": {"content_type": "reasoning_recap", "content": "The synthetic garden has herbs."},
+          "metadata": {}
+        },
+        "parent": "en-thoughts"
+      }
+    }
+  },
+  42
+]
