@@ -56,4 +56,47 @@ Rozszerzyć API o wyszukiwanie i szczegóły tematów, a następnie zbudować fr
 ### Commity
 
 - baza bloku: `1c15682`;
+- kamień milowy: `6e6e7b7`.
+
+## 2026-07-13 — Normalizacja instrukcji i statusu projektu
+
+### Wykonane zadania
+
+- zastąpiono historyczny `agents.txt` zwięzłym `AGENTS.md`;
+- zarchiwizowano pełny pierwotny brief bez utrzymywania konkurencyjnych instrukcji;
+- zsynchronizowano roadmapę, raporty i status repozytorium z commitem `6e6e7b7`;
+- potwierdzono status GitHub jako `TEMP PUBLIC`;
+- wykonano audyt bieżącego drzewa i nazw plików historii Git.
+
+### Zmienione pliki
+
+- `AGENTS.md`;
+- `docs/project-specification-history.md`;
+- `README.md`;
+- `docs/privacy.md`;
+- `docs/roadmap.md`;
+- `docs/progress.md`;
+- `docs/reports/2026-07-13-local-topic-graph-api.md`.
+
+### Testy i wyniki
+
+- audyt śledzonych i historycznych nazw prywatnych artefaktów: zero wyników;
+- wzorce sekretów, adresów e-mail i lokalnych ścieżek w śledzonych plikach: zero wyników;
+- reguły ignorowania `sources/`, SQLite, logów i wyników: potwierdzone;
+- `git diff --check`: bez błędów.
+- `pytest -q`: 16 testów zaliczonych (1 ostrzeżenie deprecacyjne zależności);
+- `ruff check backend scripts`: zaliczone;
+- `ruff format --check backend scripts`: 30 plików poprawnie sformatowanych;
+- `alembic check`: brak nowych operacji migracyjnych.
+
+### Decyzje, ograniczenia i następny krok
+
+- `AGENTS.md` zawiera wyłącznie trwałe reguły, a szczegóły pozostają w dokumentacji i ADR-ach;
+- repo pozostaje publiczne tymczasowo, dlatego audyt przed każdym push jest obowiązkowy;
+- brak zmian licencyjnych;
+- następny krok: typowany kontrakt API dla Visual MVP.
+
+### Commity
+
+- baza bloku: `6e6e7b7`;
 - bieżący blok: oczekuje na commit.

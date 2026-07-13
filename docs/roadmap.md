@@ -1,6 +1,6 @@
 # Roadmap i lista kontrolna
 
-Ta lista jest roboczym odzwierciedleniem wymagań z `agents.txt`. Zrealizowane zadania pozostają na liście i są oznaczone `[x]`. Elementy rozpoczęte, ale jeszcze nieukończone, pozostają nieodhaczone z adnotacją **częściowo**.
+Ta lista odzwierciedla aktualne wymagania produktu. Trwałe instrukcje znajdują się w `AGENTS.md`, a pierwotny brief w `docs/project-specification-history.md`. Zrealizowane zadania pozostają na liście i są oznaczone `[x]`. Elementy rozpoczęte, ale jeszcze nieukończone, pozostają nieodhaczone z adnotacją **częściowo**.
 
 ## 0. Fundament i bezpieczeństwo repozytorium
 
@@ -17,7 +17,7 @@ Ta lista jest roboczym odzwierciedleniem wymagań z `agents.txt`. Zrealizowane z
 - [x] Ustalić, że surowe dane pozostają lokalnie w `sources/` i są otwierane tylko do odczytu.
 - [x] Ustalić domyślny `privacy_level=private` dla danych importowanych.
 - [ ] Przeprowadzić pełny audyt kodu, bieżących plików i historii przed ewentualnym upublicznieniem projektu.
-- [ ] Utrzymywać repozytorium jako prywatne przynajmniej do zakończenia audytu — wymaga kontroli ustawień GitHub.
+- [x] Oznaczyć faktyczny status repozytorium jako `TEMP PUBLIC` i wymagać audytu przed każdym push.
 - [ ] Dodać licencję, kiedy zostanie podjęta decyzja o sposobie dystrybucji.
 
 ## 1. Architektura i uruchamianie
@@ -179,5 +179,5 @@ Poniższe funkcje pozostają celowo poza pierwszą wersją: import źródeł inn
 - [x] Commit 2: inspektor formatu oraz raport z pierwszego eksportu bez ujawniania treści — zrealizowane w zbiorczym commicie `1c15682`.
 - [x] Commit 3: wspólny schemat SQLite, modele SQLAlchemy i migracje Alembic — zrealizowane w zbiorczym commicie `1c15682`.
 - [x] Commit 4: `ChatGPTExportAdapter`, idempotentny import i komplet danych syntetycznych — zrealizowane w zbiorczym commicie `1c15682`.
-- [x] Commit 5: FTS5, lokalne tematy i pierwszy pionowy wycinek API → graf — **zmiany przygotowane, jeszcze niezatwierdzone**.
+- [x] Commit 5: FTS5, lokalne tematy i pierwszy pionowy wycinek API → graf — commit `6e6e7b7`.
 - [ ] Kolejne commity: czas, panel szczegółów, kontekst fragmentów i ergonomia grafu.

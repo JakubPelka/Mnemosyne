@@ -4,7 +4,9 @@ Lokalny, prywatny atlas rozmów i innych osobistych źródeł danych w czasie.
 
 > **Nigdy nie dodawaj eksportu ChatGPT, lokalnej bazy ani wygenerowanych indeksów do repozytorium.**
 
-Projekt jest na etapie przygotowania fundamentów. Dane źródłowe będą umieszczane lokalnie w ignorowanym katalogu `sources/`. Pierwszy importer obsłuży eksport ChatGPT, ale analiza i interfejs będą korzystać ze wspólnego modelu zdarzeń, niezależnego od źródła.
+Backend, import, FTS5, lokalne tematy, filtrowany graf i pierwsze API są działające. Bieżący etap buduje wizualny pionowy wycinek aplikacji. Dane źródłowe pozostają lokalnie w ignorowanym katalogu `sources/`, a analiza i interfejs korzystają ze wspólnego modelu zdarzeń niezależnego od źródła.
+
+Status repozytorium: **TEMP PUBLIC**. Repozytorium jest tymczasowo publiczne, ale nie zostało jeszcze uznane za gotowe do trwałej publikacji ani objęte licencją. Prywatne dane pozostają wyłącznie lokalnie.
 
 ## Założenia MVP
 

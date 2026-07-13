@@ -1,7 +1,7 @@
 # Kamień milowy: lokalny graf tematów i API
 
 Data: 2026-07-13  
-Status: funkcjonalność ukończona i zweryfikowana; zmiany oczekują na commit.
+Status: funkcjonalność ukończona, zweryfikowana i zatwierdzona w `6e6e7b7`.
 
 ## Aktualny stan funkcjonalny
 
@@ -59,4 +59,4 @@ Najpierw dodać API wyszukiwania FTS i zbiorczy panel szczegółów tematu. Nast
 ## Commity
 
 - poprzedni stan bazowy: `1c15682`;
-- ten kamień milowy: oczekuje na commit.
+- ten kamień milowy: `6e6e7b7`.
