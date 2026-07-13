@@ -58,12 +58,12 @@ Ta lista jest roboczym odzwierciedleniem wymagań z `agents.txt`. Zrealizowane z
 - [x] Wymusić unikalność co najmniej pary `(source_id, source_record_id)`.
 - [x] Zapisywać hash oryginalnej ścieżki zamiast jawnej ścieżki.
 - [x] Zapewnić transakcyjny, idempotentny import bez duplikatów.
-- [ ] Przygotować aktualizację danych przy imporcie kolejnego eksportu — **częściowo**: istniejące rekordy są aktualizowane, ale rekordy usunięte ze źródła nie są jeszcze oznaczane jako nieaktywne.
+- [x] Przygotować aktualizację danych przy imporcie kolejnego eksportu; rekordy nieobecne w nowszym imporcie są oznaczane jako nieaktywne.
 - [x] Dodać indeksy do filtrowania po dacie, źródle i typie zdarzenia.
 - [x] Dodać SQLite FTS5 do lokalnego wyszukiwania pełnotekstowego.
-- [ ] Zapewnić odczyt kilku wiadomości przed i po wskazanym fragmencie.
+- [x] Zapewnić odczyt kilku wiadomości przed i po wskazanym fragmencie.
 - [ ] Pozostawić możliwość późniejszego dodania lokalnych embeddingów bez wymagania ich w MVP.
-- [ ] Zweryfikować migracje w nowej i istniejącej bazie — **częściowo**: sprawdzono utworzenie nowej bazy i brak dryfu schematu; migracja istniejącej bazy będzie możliwa od drugiej rewizji.
+- [x] Zweryfikować migracje w nowej i istniejącej bazie oraz brak dryfu schematu.
 
 ## 4. `ChatGPTExportAdapter`
 
@@ -92,47 +92,47 @@ Ta lista jest roboczym odzwierciedleniem wymagań z `agents.txt`. Zrealizowane z
 - [x] Przetestować kolejność oraz rozgałęzienia wiadomości.
 - [x] Przetestować ponowny import i brak duplikatów na danych syntetycznych oraz rzeczywistym eksporcie.
 - [x] Przetestować FTS5 oraz filtrowanie po dacie.
-- [ ] Przetestować odczyt kontekstu wokół wiadomości.
+- [x] Przetestować odczyt kontekstu wokół wiadomości.
 - [x] Przetestować, że logi i błędy nie zawierają prywatnej treści.
 - [x] Uruchamiać testy po każdym większym kroku.
 
 ## 6. Lokalne wydobywanie tematów
 
-- [ ] Znormalizować tekst bez korzystania z usług zewnętrznych.
-- [ ] Dodać listy słów pustych dla języka polskiego, szwedzkiego i angielskiego.
-- [ ] Obliczać częstotliwości słów i n-gramów.
-- [ ] Wyznaczać proste lokalne słowa kluczowe i tematy.
-- [ ] Ocenić KeyBERT lub spaCy tylko wtedy, gdy nie skomplikują istotnie instalacji.
-- [ ] Zapisać nazwę tematu oraz liczbę wiadomości i rozmów.
-- [ ] Zapisać pierwsze i ostatnie wystąpienie tematu.
-- [ ] Obliczać intensywność tematu w poszczególnych miesiącach.
-- [ ] Zachować analizę niezależną od formatu ChatGPT.
-- [ ] Nie budować na tym etapie pełnej ontologii ani „cyfrowego bliźniaka”.
+- [x] Znormalizować tekst bez korzystania z usług zewnętrznych.
+- [x] Dodać listy słów pustych dla języka polskiego, szwedzkiego i angielskiego.
+- [x] Obliczać częstotliwości słów i n-gramów.
+- [x] Wyznaczać proste lokalne słowa kluczowe i tematy.
+- [x] Ocenić KeyBERT lub spaCy; na tym etapie prosty TF-IDF nie wymaga cięższych zależności.
+- [x] Zapisać nazwę tematu oraz liczbę wiadomości i rozmów.
+- [x] Zapisać pierwsze i ostatnie wystąpienie tematu.
+- [x] Obliczać intensywność tematu w poszczególnych miesiącach.
+- [x] Zachować analizę niezależną od formatu ChatGPT.
+- [x] Nie budować na tym etapie pełnej ontologii ani „cyfrowego bliźniaka”.
 
 ## 7. Graf relacji tematów
 
-- [ ] Reprezentować temat jako węzeł, a jego intensywność jako wielkość węzła.
-- [ ] Reprezentować współwystępowanie tematów jako ważoną krawędź.
-- [ ] Ustalić, czy podstawową jednostką współwystępowania jest rozmowa, wiadomość czy obie metryki.
-- [ ] Filtrować graf według zakresu czasu.
-- [ ] Dodać minimalny próg wystąpień tematów.
-- [ ] Dodać minimalny próg siły relacji.
-- [ ] Dodać limit widocznych węzłów.
-- [ ] Dodać filtrowanie kategorii i `source_type`.
-- [ ] Pokazywać najbliższych sąsiadów wybranego węzła.
-- [ ] Umożliwić ukrycie słabych połączeń.
-- [ ] Przetestować budowę i filtrowanie relacji.
+- [x] Reprezentować temat jako węzeł, a jego intensywność jako wielkość węzła.
+- [x] Reprezentować współwystępowanie tematów jako ważoną krawędź.
+- [x] Ustalić jednostki współwystępowania: zapisywać zarówno liczbę wiadomości, jak i kontekstów/rozmów.
+- [x] Filtrować graf według zakresu czasu.
+- [x] Dodać minimalny próg wystąpień tematów.
+- [x] Dodać minimalny próg siły relacji.
+- [x] Dodać limit widocznych węzłów.
+- [x] Dodać filtrowanie kategorii i `source_type`.
+- [x] Pokazywać najbliższych sąsiadów wybranego węzła.
+- [x] Umożliwić ukrycie słabych połączeń.
+- [x] Przetestować budowę i filtrowanie relacji.
 
 ## 8. API
 
 - [ ] Udostępnić podsumowanie źródeł i przebieg importów.
-- [ ] Udostępnić graf tematów filtrowany po czasie, źródle, progach i limitach.
+- [x] Udostępnić graf tematów filtrowany po czasie, źródle, progach i limitach.
 - [ ] Udostępnić wyszukiwanie tematów i pełnotekstowe wyszukiwanie zdarzeń.
-- [ ] Udostępnić szczegóły tematu, intensywność w czasie i najbliższe relacje.
+- [ ] Udostępnić szczegóły tematu, intensywność w czasie i najbliższe relacje — **częściowo**: gotowe są intensywność i relacje grafu, brakuje zbiorczego endpointu szczegółów.
 - [ ] Udostępnić listę rozmów oraz fragmentów źródłowych powiązanych z tematem.
-- [ ] Udostępnić kontekst kilku wiadomości przed i po fragmencie wyłącznie na żądanie.
-- [ ] Zwracać stabilny wewnętrzny identyfikator źródła.
-- [ ] Nie zwracać automatycznie całej historii rozmowy.
+- [x] Udostępnić kontekst kilku wiadomości przed i po fragmencie wyłącznie na żądanie.
+- [x] Zwracać stabilny wewnętrzny identyfikator źródła.
+- [x] Nie zwracać automatycznie całej historii rozmowy.
 - [ ] Uwzględnić `source_type` oraz `privacy_level` w kontraktach API.
 
 ## 9. Webowy interfejs MVP
@@ -176,8 +176,8 @@ Poniższe funkcje pozostają celowo poza pierwszą wersją: import źródeł inn
 ## Proponowana kolejność małych commitów
 
 - [x] Commit 1: bezpieczny szkielet repozytorium, dokumentacja i reguły ignorowania.
-- [ ] Commit 2: inspektor formatu oraz raport z pierwszego eksportu bez ujawniania treści — **zmiany przygotowane, jeszcze niezatwierdzone**.
-- [ ] Commit 3: wspólny schemat SQLite, modele SQLAlchemy i migracje Alembic — **zmiany przygotowane, jeszcze niezatwierdzone**.
-- [ ] Commit 4: `ChatGPTExportAdapter`, idempotentny import i komplet danych syntetycznych — **zmiany przygotowane, jeszcze niezatwierdzone**.
-- [ ] Commit 5: FTS5, lokalne tematy i pierwszy pionowy wycinek API → graf.
+- [x] Commit 2: inspektor formatu oraz raport z pierwszego eksportu bez ujawniania treści — zrealizowane w zbiorczym commicie `1c15682`.
+- [x] Commit 3: wspólny schemat SQLite, modele SQLAlchemy i migracje Alembic — zrealizowane w zbiorczym commicie `1c15682`.
+- [x] Commit 4: `ChatGPTExportAdapter`, idempotentny import i komplet danych syntetycznych — zrealizowane w zbiorczym commicie `1c15682`.
+- [x] Commit 5: FTS5, lokalne tematy i pierwszy pionowy wycinek API → graf — **zmiany przygotowane, jeszcze niezatwierdzone**.
 - [ ] Kolejne commity: czas, panel szczegółów, kontekst fragmentów i ergonomia grafu.

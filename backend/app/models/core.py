@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     CheckConstraint,
     DateTime,
     Float,
@@ -50,6 +51,7 @@ class Event(Base):
     )
     source_record_id: Mapped[str] = mapped_column(String(255), nullable=False)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    context_id: Mapped[str | None] = mapped_column(String(255), index=True)
     timestamp_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     timestamp_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     title: Mapped[str | None] = mapped_column(Text)
@@ -57,6 +59,12 @@ class Event(Base):
     url: Mapped[str | None] = mapped_column(Text)
     location_id: Mapped[str | None] = mapped_column(String(128))
     privacy_level: Mapped[str] = mapped_column(String(16), nullable=False, default="private")
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="1", index=True
+    )
+    analysis_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="1", index=True
+    )
     raw_payload_reference: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -79,6 +87,12 @@ class Topic(Base):
     topic_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     category: Mapped[str] = mapped_column(String(64), nullable=False, default="keyword")
+    message_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    conversation_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -93,6 +107,22 @@ class EventTopic(Base):
         ForeignKey("topics.topic_id", ondelete="CASCADE"), primary_key=True
     )
     weight: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+
+
+class TopicRelation(Base):
+    __tablename__ = "topic_relations"
+    __table_args__ = (UniqueConstraint("source_topic_id", "target_topic_id"),)
+
+    relation_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    source_topic_id: Mapped[str] = mapped_column(
+        ForeignKey("topics.topic_id", ondelete="CASCADE"), nullable=False
+    )
+    target_topic_id: Mapped[str] = mapped_column(
+        ForeignKey("topics.topic_id", ondelete="CASCADE"), nullable=False
+    )
+    message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    conversation_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    weight: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
 
 
 class EventEntity(Base):

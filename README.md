@@ -27,14 +27,23 @@ uvicorn backend.app.main:app --reload
 
 Endpoint kontrolny: `http://127.0.0.1:8000/health`.
 
+Pierwsze lokalne endpointy danych:
+
+- `GET /api/graph` — graf z filtrami czasu, progów, źródła i sąsiadów;
+- `GET /api/topics/{topic_id}/intensity` — miesięczna intensywność;
+- `GET /api/messages/{event_id}/context` — ograniczony kontekst fragmentu.
+
 Bezpieczna inspekcja i lokalny import:
 
 ```bash
 python scripts/inspect_export.py sources/eksport.zip
 alembic upgrade head
 python scripts/import_export.py sources/eksport.zip
+python scripts/build_topic_graph.py
 ```
 
 Importer przyjmuje również rozpakowany katalog. Domyślna baza `data/mnemosyne.sqlite3` oraz całe `sources/` są ignorowane przez Git. Ponowny import aktualizuje istniejące rekordy i nie tworzy duplikatów.
+
+Budowa tematów działa całkowicie lokalnie i wypisuje wyłącznie liczniki — nie nazwy tematów ani treść wiadomości.
 
 Frontend zostanie uruchomiony po dodaniu pierwszego pionowego wycinka funkcjonalności. Szczegóły projektu znajdują się w [`docs/architecture.md`](docs/architecture.md), a zasady bezpieczeństwa w [`docs/privacy.md`](docs/privacy.md).

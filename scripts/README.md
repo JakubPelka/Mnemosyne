@@ -16,4 +16,12 @@ alembic upgrade head
 python scripts/import_export.py sources/rozpakowany-eksport
 ```
 
-Wynik trafia domyślnie do ignorowanej bazy `data/mnemosyne.sqlite3`. Skrypt raportuje wyłącznie liczniki i losowy identyfikator przebiegu importu. Punkt wejścia przebudowy grafu zostanie dodany po implementacji tematów.
+Wynik trafia domyślnie do ignorowanej bazy `data/mnemosyne.sqlite3`. Skrypt raportuje wyłącznie liczniki i losowy identyfikator przebiegu importu.
+
+Indeks tematów i relacje można przebudować lokalnie:
+
+```bash
+python scripts/build_topic_graph.py
+```
+
+Opcje `--min-frequency`, `--max-topics` i `--topics-per-event` sterują gęstością grafu. Skrypt nie wypisuje nazw tematów ani fragmentów źródłowych.

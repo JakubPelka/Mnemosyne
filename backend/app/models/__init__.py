@@ -11,6 +11,7 @@ from .core import (
     ImportRun,
     Source,
     Topic,
+    TopicRelation,
 )
 
 __all__ = [
@@ -25,4 +26,5 @@ __all__ = [
     "ImportRun",
     "Source",
     "Topic",
+    "TopicRelation",
 ]

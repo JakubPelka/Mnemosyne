@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from sqlalchemy.dialects.sqlite import insert
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from backend.app.importers.chatgpt import ChatGPTConversation, ChatGPTExportAdapter
@@ -71,6 +72,7 @@ def import_chatgpt_export(
         )
     )
     session.flush()
+    session.execute(update(Event).where(Event.source_id == source_id).values(is_active=False))
 
     conversation_count = 0
     event_count = 0
@@ -123,11 +125,14 @@ def _import_batch(
                 "source_id": source_id,
                 "source_record_id": f"conversation:{conversation.conversation_id}",
                 "event_type": "chatgpt_conversation",
+                "context_id": conversation.conversation_id,
                 "timestamp_start": conversation.created_at,
                 "timestamp_end": conversation.updated_at,
                 "title": conversation.title,
                 "text": None,
                 "privacy_level": "private",
+                "is_active": True,
+                "analysis_enabled": False,
                 "raw_payload_reference": f"conversation:{conversation.conversation_id}",
                 "created_at": imported_at,
                 "updated_at": imported_at,
@@ -153,11 +158,14 @@ def _import_batch(
                     "source_id": source_id,
                     "source_record_id": f"message:{scoped_message_id}",
                     "event_type": "chatgpt_message",
+                    "context_id": conversation.conversation_id,
                     "timestamp_start": message.created_at,
                     "timestamp_end": None,
                     "title": conversation.title,
                     "text": message.text,
                     "privacy_level": "private",
+                    "is_active": True,
+                    "analysis_enabled": message.content_type in {"text", "multimodal_text"},
                     "raw_payload_reference": (
                         f"conversation:{conversation.conversation_id}/message:{message.message_id}"
                     ),
@@ -195,11 +203,14 @@ def _import_batch(
         ("source_id", "source_record_id"),
         (
             "event_type",
+            "context_id",
             "timestamp_start",
             "timestamp_end",
             "title",
             "text",
             "privacy_level",
+            "is_active",
+            "analysis_enabled",
             "raw_payload_reference",
             "updated_at",
         ),

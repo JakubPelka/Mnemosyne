@@ -755,3 +755,29 @@ chatgpt_conversations
 chatgpt_messages
 
 To niewielkie rozszerzenie teraz oszczędzi później dużej migracji całego projektu. Nie trzeba jednak budować od razu uniwersalnego kombajnu — wystarczy wspólny rdzeń i pierwszy adapter ChatGPTExportAdapter.
+
+⸻
+
+Raportowanie postępu
+
+Nie twórz osobnego raportu po każdym małym zadaniu lub commicie.
+
+Po każdym logicznym bloku prac dopisz zwięzłą sekcję do `docs/progress.md`, zawierającą:
+
+* datę i nazwę bloku,
+* wykonane zadania,
+* zmienione pliki,
+* uruchomione testy i ich wyniki,
+* decyzje techniczne,
+* znane ograniczenia,
+* otwarte kwestie,
+* proponowany następny krok,
+* identyfikatory commitów.
+
+Osobny raport w `docs/reports/` twórz wyłącznie po ukończeniu kamienia milowego, większej migracji, istotnej zmianie architektury lub audycie bezpieczeństwa. Nazwa raportu ma format `YYYY-MM-DD-short-milestone-name.md`.
+
+Raport kamienia milowego powinien zawierać również aktualny stan funkcjonalny, kryteria ukończenia, wyniki testów, znane błędy, ryzyka prywatności i bezpieczeństwa, status danych prywatnych względem Git, instrukcję uruchomienia oraz rekomendowany następny etap.
+
+Ważne decyzje architektoniczne dokumentuj jako ADR w `docs/adr/`.
+
+Nie uznawaj zadania za ukończone wyłącznie na podstawie deklaracji. Ukończenie musi być poparte testami, stanem repozytorium i możliwymi do sprawdzenia rezultatami.
