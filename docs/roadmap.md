@@ -180,4 +180,7 @@ Poniższe funkcje pozostają celowo poza pierwszą wersją: import źródeł inn
 - [x] Commit 3: wspólny schemat SQLite, modele SQLAlchemy i migracje Alembic — zrealizowane w zbiorczym commicie `1c15682`.
 - [x] Commit 4: `ChatGPTExportAdapter`, idempotentny import i komplet danych syntetycznych — zrealizowane w zbiorczym commicie `1c15682`.
 - [x] Commit 5: FTS5, lokalne tematy i pierwszy pionowy wycinek API → graf — commit `6e6e7b7`.
-- [ ] Kolejne commity: czas, panel szczegółów, kontekst fragmentów i ergonomia grafu.
+- [x] Normalizacja instrukcji i statusu projektu — commit `2b42516`.
+- [x] Typowane wyszukiwanie i szczegóły tematów — commit `47366ec`.
+- [x] Czasowy graf, panel szczegółów i kontekst — commit `1ea6133`.
+- [x] Compose, pełna walidacja i audyt Visual MVP — commit `2088608`.

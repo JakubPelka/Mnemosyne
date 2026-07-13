@@ -215,6 +215,7 @@ Dodać produkcyjne obrazy backendu i frontendu oraz lokalny Docker Compose z kon
 - wykluczono prywatne dane, archiwa, bazy, środowiska i wyniki z kontekstu Docker;
 - zweryfikowano pełny stos na rzeczywistej lokalnej bazie, raportując wyłącznie liczniki;
 - wykonano końcowy audyt bieżącego drzewa i całej historii Git.
+- utworzono pojedynczy raport ukończonego kamienia milowego Visual MVP.
 
 ### Zmienione pliki
 
@@ -224,6 +225,7 @@ Dodać produkcyjne obrazy backendu i frontendu oraz lokalny Docker Compose z kon
 - `docker-compose.yml`;
 - `README.md`;
 - `docs/roadmap.md` i `docs/progress.md`.
+- `docs/reports/2026-07-13-visual-mvp.md`.
 
 ### Testy i wyniki
 
@@ -261,4 +263,4 @@ Po użytkowej ocenie atlasu dostroić stopwords i progi tematów na podstawie ob
 ### Commity
 
 - baza bloku: `1ea6133`;
-- bieżący blok: oczekuje na commit.
+- Compose, walidacja i audyt: `2088608`.
