@@ -127,13 +127,13 @@ Ta lista odzwierciedla aktualne wymagania produktu. Trwałe instrukcje znajdują
 
 - [ ] Udostępnić podsumowanie źródeł i przebieg importów.
 - [x] Udostępnić graf tematów filtrowany po czasie, źródle, progach i limitach.
-- [ ] Udostępnić wyszukiwanie tematów i pełnotekstowe wyszukiwanie zdarzeń.
-- [ ] Udostępnić szczegóły tematu, intensywność w czasie i najbliższe relacje — **częściowo**: gotowe są intensywność i relacje grafu, brakuje zbiorczego endpointu szczegółów.
-- [ ] Udostępnić listę rozmów oraz fragmentów źródłowych powiązanych z tematem.
+- [x] Udostępnić wyszukiwanie tematów i pełnotekstowe wyszukiwanie zdarzeń.
+- [x] Udostępnić szczegóły tematu, intensywność w czasie i najbliższe relacje.
+- [x] Udostępnić paginowaną listę fragmentów źródłowych powiązanych z tematem.
 - [x] Udostępnić kontekst kilku wiadomości przed i po fragmencie wyłącznie na żądanie.
 - [x] Zwracać stabilny wewnętrzny identyfikator źródła.
 - [x] Nie zwracać automatycznie całej historii rozmowy.
-- [ ] Uwzględnić `source_type` oraz `privacy_level` w kontraktach API.
+- [x] Uwzględnić `source_type` oraz `privacy_level` w kontraktach API.
 
 ## 9. Webowy interfejs MVP
 

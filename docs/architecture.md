@@ -31,6 +31,8 @@ Eksport pokazał, że `message_id` nie jest globalnie unikalne: ten sam identyfi
 
 SQLite FTS5 jest utrzymywany przez triggery powiązane z `events`. Tabele wirtualne i cieniujące FTS są celowo wyłączone z porównywania schematu Alembic.
 
+Publiczny kontrakt lokalnego backendu jest opisany modelami Pydantic. Wyszukiwanie FTS5 i wystąpienia tematu zwracają wyłącznie krótkie fragmenty oraz stabilne identyfikatory; ograniczony kontekst rozmowy jest pobierany osobno po wyborze zdarzenia. Graf i wyszukiwanie jawnie przyjmują `privacy_level`, domyślnie `private`.
+
 Każde zdarzenie ma neutralne `context_id`, `is_active` oraz `analysis_enabled`. `context_id` grupuje zdarzenia bez zależności od typu źródła, `is_active` pozwala zachować historię rekordów nieobecnych w nowszym imporcie, a `analysis_enabled` oddziela przechowywanie tekstu od zgody na udział w NLP. Dla ChatGPT analizowane są tylko widoczne `text` i `multimodal_text`.
 
 Pierwsza analiza tematów używa lokalnej normalizacji Unicode, wspólnych słów pustych dla polskiego, szwedzkiego i angielskiego, unigramów, bigramów oraz TF-IDF. `event_topics` przechowuje przypisania, a `topic_relations` globalne współwystępowanie. Warstwa zapytań przelicza widoczny graf dla zakresu czasu i filtrów, dzięki czemu frontend nie zależy od globalnych agregatów.

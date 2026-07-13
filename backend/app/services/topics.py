@@ -200,7 +200,12 @@ def build_topics(
     )
 
 
-def topic_monthly_intensity(session: Session, topic_id: str) -> tuple[MonthlyIntensity, ...]:
+def topic_monthly_intensity(
+    session: Session,
+    topic_id: str,
+    *,
+    privacy_level: str = "private",
+) -> tuple[MonthlyIntensity, ...]:
     rows = session.execute(
         select(
             func.strftime("%Y-%m", Event.timestamp_start).label("month"),
@@ -211,6 +216,7 @@ def topic_monthly_intensity(session: Session, topic_id: str) -> tuple[MonthlyInt
         .where(
             EventTopic.topic_id == topic_id,
             Event.is_active.is_(True),
+            Event.privacy_level == privacy_level,
             Event.timestamp_start.is_not(None),
         )
         .group_by("month")

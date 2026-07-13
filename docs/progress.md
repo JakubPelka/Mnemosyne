@@ -99,4 +99,54 @@ Rozszerzyć API o wyszukiwanie i szczegóły tematów, a następnie zbudować fr
 ### Commity
 
 - baza bloku: `6e6e7b7`;
+- normalizacja instrukcji: `2b42516`.
+
+## 2026-07-13 — Typowany kontrakt API Visual MVP
+
+### Wykonane zadania
+
+- dodano jawne modele odpowiedzi Pydantic i wersję API `0.2.0`;
+- dodano metadane aplikacji, wyszukiwanie tematów, szczegóły tematu i paginowane wystąpienia;
+- udostępniono FTS5 z paginacją oraz filtrami czasu, źródła i prywatności;
+- rozszerzono graf i intensywność o jawny filtr `privacy_level=private`;
+- ograniczono wyniki list do krótkich fragmentów, pozostawiając kontekst osobnemu endpointowi;
+- dodano testy kontraktu OpenAPI, filtrów, 404, paginacji i granicy prywatności.
+
+### Zmienione pliki
+
+- `backend/app/api/routes.py`;
+- `backend/app/api/schemas.py`;
+- `backend/app/main.py` i `backend/app/main_version.py`;
+- `backend/app/services/catalog.py`, `graph.py` i `topics.py`;
+- `backend/tests/test_api.py`;
+- `docs/architecture.md`, `docs/roadmap.md` i `docs/adr/0004-explicit-excerpt-api-boundary.md`.
+
+### Testy i wyniki
+
+- `pytest -q`: 22 testy zaliczone;
+- `ruff check backend scripts`: zaliczone;
+- `ruff format --check backend scripts`: 33 pliki poprawnie sformatowane;
+- `alembic check`: brak nowych operacji migracyjnych;
+- ostrzeżenia dotyczą wyłącznie deprecjacji `TestClient` oraz adaptera dat SQLite w Pythonie 3.12.
+
+### Decyzje techniczne
+
+- OpenAPI jest źródłem prawdy dla klienta frontendowego;
+- FTS składa zapytanie wyłącznie z bezpiecznie cytowanych tokenów;
+- statystyki szczegółów i sąsiedztwo są liczone na aktywnych zdarzeniach zgodnych z prywatnością;
+- pełna treść nie jest automatycznie zwracana przez wyszukiwanie ani wystąpienia.
+
+### Znane ograniczenia i otwarte kwestie
+
+- rola jest obecnie dostępna tylko dla zdarzeń ChatGPT, a dla przyszłych adapterów może być pusta;
+- wyszukiwanie tokenów FTS używa semantyki `AND`, bez rankingu semantycznego;
+- frontend nie jest jeszcze zaimplementowany.
+
+### Następny krok
+
+Zbudować pojedynczy widok React/Sigma z filtrem czasu, wyborem tematu, wystąpieniami i kontekstem.
+
+### Commity
+
+- baza bloku: `2b42516`;
 - bieżący blok: oczekuje na commit.
