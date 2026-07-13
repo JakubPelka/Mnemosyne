@@ -202,4 +202,63 @@ Dodać produkcyjne obrazy backendu i frontendu oraz lokalny Docker Compose z kon
 ### Commity
 
 - baza bloku: `47366ec`;
+- wizualny pionowy wycinek: `1ea6133`.
+
+## 2026-07-13 — Lokalne uruchamianie Compose i walidacja Visual MVP
+
+### Wykonane zadania
+
+- dodano wieloetapowy obraz frontendu i produkcyjne serwowanie przez Nginx;
+- backend automatycznie wykonuje migracje przed startem i nie zapisuje access logów;
+- połączono frontend z backendem wewnętrznym proxy `/api`;
+- dodano healthchecki, zależność od gotowego backendu i publikację wyłącznie na `127.0.0.1`;
+- wykluczono prywatne dane, archiwa, bazy, środowiska i wyniki z kontekstu Docker;
+- zweryfikowano pełny stos na rzeczywistej lokalnej bazie, raportując wyłącznie liczniki;
+- wykonano końcowy audyt bieżącego drzewa i całej historii Git.
+
+### Zmienione pliki
+
+- `.dockerignore`;
+- `backend/Dockerfile`;
+- `frontend/Dockerfile` i `frontend/nginx.conf`;
+- `docker-compose.yml`;
+- `README.md`;
+- `docs/roadmap.md` i `docs/progress.md`.
+
+### Testy i wyniki
+
+- `pytest -q`: 22 testy zaliczone;
+- `ruff check backend scripts`: zaliczone;
+- `ruff format --check backend scripts`: 33 pliki poprawnie sformatowane;
+- `alembic check`: brak nowych operacji migracyjnych;
+- `npm test`: 9 testów zaliczonych;
+- `npm run build`: produkcyjny bundle zbudowany;
+- `npm audit --audit-level=high`: zero podatności;
+- `docker-compose config --quiet`: zaliczone;
+- `docker-compose build --pull`: oba obrazy zbudowane, kontekst 429,1 KiB;
+- healthcheck i integracja HTTP Compose: frontend i backend zdrowe, HTML, metadane i graf odpowiadają 200;
+- inspekcja obrazów: brak `sources/`, `data/` i `.env`;
+- inspekcja montowań: `sources/` tylko do odczytu, `data/` zapisywalne lokalnie;
+- audyt Git: zero prywatnych artefaktów, sekretów, e-maili i lokalnych ścieżek w śledzonej historii.
+
+### Decyzje techniczne
+
+- frontend produkcyjny używa nieuprzywilejowanego Nginx na porcie 8080;
+- kontener backendu działa jako UID 1000, stosuje migracje i publikuje port wyłącznie lokalnie;
+- bind mount `data/` zachowuje istniejącą lokalną bazę, zamiast tworzyć pusty nazwany wolumen;
+- `.dockerignore` chroni dane już na granicy kontekstu buildu.
+
+### Znane ograniczenia i otwarte kwestie
+
+- lokalne środowisko ma starsze `docker-compose` 1.29 i legacy builder; konfiguracja jest zgodna, ale warto później przejść na Compose v2/BuildKit;
+- ostrzeżenia testów Pythona dotyczą deprecjacji zależności, nie błędów aplikacji;
+- licencja pozostaje celowo nieustalona.
+
+### Następny krok
+
+Po użytkowej ocenie atlasu dostroić stopwords i progi tematów na podstawie obserwacji wizualnych, bez dodawania embeddingów przed tą oceną.
+
+### Commity
+
+- baza bloku: `1ea6133`;
 - bieżący blok: oczekuje na commit.

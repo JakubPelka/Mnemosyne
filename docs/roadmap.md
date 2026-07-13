@@ -157,7 +157,7 @@ Ta lista odzwierciedla aktualne wymagania produktu. Trwałe instrukcje znajdują
 - [x] Użytkownik może wskazać lokalne archiwum lub rozpakowany eksport.
 - [x] Użytkownik może zaimportować rozmowy bez duplikatów.
 - [x] Użytkownik może uruchomić aplikację lokalnie bez Dockera.
-- [ ] Użytkownik może uruchomić aplikację przez Docker Compose.
+- [x] Użytkownik może uruchomić aplikację przez Docker Compose.
 - [x] Użytkownik widzi sieć tematów.
 - [x] Użytkownik ogranicza sieć do wybranego okresu.
 - [x] Użytkownik wyszukuje temat.

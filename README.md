@@ -37,6 +37,20 @@ npm run dev
 
 Otwórz `http://127.0.0.1:5173`. Vite przekazuje lokalne żądania `/api` do backendu na `127.0.0.1:8000`; aplikacja nie wymaga CORS ani połączeń zewnętrznych po instalacji zależności.
 
+### Docker Compose
+
+Cały stos można uruchomić jedną komendą:
+
+```bash
+docker-compose up --build
+```
+
+Następnie otwórz `http://127.0.0.1:5173`. Backend automatycznie stosuje migracje, `data/` jest lokalnym zapisywalnym montowaniem, a `sources/` montowaniem tylko do odczytu. Oba porty są publikowane wyłącznie na `127.0.0.1`. Zatrzymanie stosu:
+
+```bash
+docker-compose down
+```
+
 Endpoint kontrolny: `http://127.0.0.1:8000/health`.
 
 Lokalne endpointy danych:
