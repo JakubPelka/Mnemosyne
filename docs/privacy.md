@@ -20,6 +20,6 @@ Zatrzymaj aplikację, a następnie usuń lokalną bazę z `data/` oraz powiązan
 2. Uruchom `git ls-files` i upewnij się, że nie ma tam danych źródłowych, baz, logów ani wyników.
 3. Przeszukaj śledzone pliki pod kątem sekretów i charakterystycznych prywatnych fraz.
 4. Skontroluj całą historię Git, nie tylko bieżący commit.
-5. Do czasu zakończenia audytu utrzymuj repozytorium jako prywatne.
+5. Repozytorium ma obecnie status `TEMP PUBLIC`. Przed każdym push wykonaj audyt, a po wykryciu prywatnych danych natychmiast przerwij publikację.
 
 Samo dopisanie reguły do `.gitignore` nie usuwa pliku, który był wcześniej śledzony, ani nie czyści historii Git.

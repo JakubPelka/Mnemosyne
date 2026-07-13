@@ -1,8 +1,9 @@
 from fastapi import FastAPI
 
 from backend.app.api.routes import router
+from backend.app.main_version import API_VERSION
 
-app = FastAPI(title="Mnemosyne", version="0.1.0")
+app = FastAPI(title="Mnemosyne", version=API_VERSION)
 app.include_router(router)
 
 

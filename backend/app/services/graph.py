@@ -44,6 +44,7 @@ def get_topic_graph(
     start: datetime | None = None,
     end: datetime | None = None,
     source_type: str | None = None,
+    privacy_level: str = "private",
     categories: frozenset[str] | None = None,
     min_occurrences: int = 2,
     min_edge_messages: int = 1,
@@ -69,7 +70,7 @@ def get_topic_graph(
         .join(EventTopic, EventTopic.event_id == Event.event_id)
         .join(Topic, Topic.topic_id == EventTopic.topic_id)
         .join(Source, Source.source_id == Event.source_id)
-        .where(Event.is_active.is_(True))
+        .where(Event.is_active.is_(True), Event.privacy_level == privacy_level)
     )
     if start is not None:
         statement = statement.where(Event.timestamp_start >= start)

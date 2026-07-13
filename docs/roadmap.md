@@ -1,6 +1,6 @@
 # Roadmap i lista kontrolna
 
-Ta lista jest roboczym odzwierciedleniem wymagań z `agents.txt`. Zrealizowane zadania pozostają na liście i są oznaczone `[x]`. Elementy rozpoczęte, ale jeszcze nieukończone, pozostają nieodhaczone z adnotacją **częściowo**.
+Ta lista odzwierciedla aktualne wymagania produktu. Trwałe instrukcje znajdują się w `AGENTS.md`, a pierwotny brief w `docs/project-specification-history.md`. Zrealizowane zadania pozostają na liście i są oznaczone `[x]`. Elementy rozpoczęte, ale jeszcze nieukończone, pozostają nieodhaczone z adnotacją **częściowo**.
 
 ## 0. Fundament i bezpieczeństwo repozytorium
 
@@ -17,7 +17,7 @@ Ta lista jest roboczym odzwierciedleniem wymagań z `agents.txt`. Zrealizowane z
 - [x] Ustalić, że surowe dane pozostają lokalnie w `sources/` i są otwierane tylko do odczytu.
 - [x] Ustalić domyślny `privacy_level=private` dla danych importowanych.
 - [ ] Przeprowadzić pełny audyt kodu, bieżących plików i historii przed ewentualnym upublicznieniem projektu.
-- [ ] Utrzymywać repozytorium jako prywatne przynajmniej do zakończenia audytu — wymaga kontroli ustawień GitHub.
+- [x] Oznaczyć faktyczny status repozytorium jako `TEMP PUBLIC` i wymagać audytu przed każdym push.
 - [ ] Dodać licencję, kiedy zostanie podjęta decyzja o sposobie dystrybucji.
 
 ## 1. Architektura i uruchamianie
@@ -127,43 +127,43 @@ Ta lista jest roboczym odzwierciedleniem wymagań z `agents.txt`. Zrealizowane z
 
 - [ ] Udostępnić podsumowanie źródeł i przebieg importów.
 - [x] Udostępnić graf tematów filtrowany po czasie, źródle, progach i limitach.
-- [ ] Udostępnić wyszukiwanie tematów i pełnotekstowe wyszukiwanie zdarzeń.
-- [ ] Udostępnić szczegóły tematu, intensywność w czasie i najbliższe relacje — **częściowo**: gotowe są intensywność i relacje grafu, brakuje zbiorczego endpointu szczegółów.
-- [ ] Udostępnić listę rozmów oraz fragmentów źródłowych powiązanych z tematem.
+- [x] Udostępnić wyszukiwanie tematów i pełnotekstowe wyszukiwanie zdarzeń.
+- [x] Udostępnić szczegóły tematu, intensywność w czasie i najbliższe relacje.
+- [x] Udostępnić paginowaną listę fragmentów źródłowych powiązanych z tematem.
 - [x] Udostępnić kontekst kilku wiadomości przed i po fragmencie wyłącznie na żądanie.
 - [x] Zwracać stabilny wewnętrzny identyfikator źródła.
 - [x] Nie zwracać automatycznie całej historii rozmowy.
-- [ ] Uwzględnić `source_type` oraz `privacy_level` w kontraktach API.
+- [x] Uwzględnić `source_type` oraz `privacy_level` w kontraktach API.
 
 ## 9. Webowy interfejs MVP
 
-- [ ] Wyświetlić interaktywny graf z zoomem i przesuwaniem.
-- [ ] Dodać wyszukiwarkę tematów.
-- [ ] Dodać filtrowanie po liczbie wystąpień i sile relacji.
-- [ ] Dodać przełącznik ograniczający graf do sąsiadów wybranego węzła.
-- [ ] Dodać wybór zakresu dat.
-- [ ] Aktualizować graf i wielkość węzłów według wybranego okresu.
-- [ ] Przygotować architekturę pod późniejsze odtwarzanie miesiąc po miesiącu.
-- [ ] Dodać filtrowanie po `source_type`, początkowo z wartością `chatgpt`.
-- [ ] Po kliknięciu tematu pokazać liczbę rozmów i wiadomości oraz pierwsze i ostatnie wystąpienie.
-- [ ] Pokazać wykres intensywności tematu w czasie.
-- [ ] Pokazać najczęstsze tematy powiązane.
-- [ ] Pokazać listę rozmów i fragmentów źródłowych.
-- [ ] Po wybraniu fragmentu załadować jego treść, datę, tytuł rozmowy, stabilny identyfikator i ograniczony kontekst.
-- [ ] Nie ładować całych rozmów automatycznie.
+- [x] Wyświetlić interaktywny graf z zoomem i przesuwaniem.
+- [x] Dodać wyszukiwarkę tematów.
+- [x] Dodać filtrowanie po liczbie wystąpień i sile relacji.
+- [x] Dodać przełącznik ograniczający graf do sąsiadów wybranego węzła.
+- [x] Dodać wybór zakresu dat.
+- [x] Aktualizować graf i wielkość węzłów według wybranego okresu.
+- [x] Przygotować architekturę pod późniejsze odtwarzanie miesiąc po miesiącu.
+- [x] Dodać filtrowanie po `source_type`, początkowo z wartością `chatgpt`.
+- [x] Po kliknięciu tematu pokazać liczbę rozmów i wiadomości oraz pierwsze i ostatnie wystąpienie.
+- [x] Pokazać wykres intensywności tematu w czasie.
+- [x] Pokazać najczęstsze tematy powiązane.
+- [x] Pokazać listę rozmów i fragmentów źródłowych.
+- [x] Po wybraniu fragmentu załadować jego treść, datę, tytuł rozmowy, stabilny identyfikator i ograniczony kontekst.
+- [x] Nie ładować całych rozmów automatycznie.
 
 ## 10. Kryteria ukończenia MVP
 
 - [x] Użytkownik może wskazać lokalne archiwum lub rozpakowany eksport.
 - [x] Użytkownik może zaimportować rozmowy bez duplikatów.
-- [ ] Użytkownik może uruchomić aplikację lokalnie bez Dockera.
-- [ ] Użytkownik może uruchomić aplikację przez Docker Compose.
-- [ ] Użytkownik widzi sieć tematów.
-- [ ] Użytkownik ogranicza sieć do wybranego okresu.
-- [ ] Użytkownik wyszukuje temat.
-- [ ] Użytkownik wybiera węzeł i widzi powiązane rozmowy oraz fragmenty.
-- [ ] Użytkownik rozwija ograniczony kontekst wybranego fragmentu.
-- [ ] Cały przepływ działa bez wysyłania danych poza komputer użytkownika.
+- [x] Użytkownik może uruchomić aplikację lokalnie bez Dockera.
+- [x] Użytkownik może uruchomić aplikację przez Docker Compose.
+- [x] Użytkownik widzi sieć tematów.
+- [x] Użytkownik ogranicza sieć do wybranego okresu.
+- [x] Użytkownik wyszukuje temat.
+- [x] Użytkownik wybiera węzeł i widzi powiązane rozmowy oraz fragmenty.
+- [x] Użytkownik rozwija ograniczony kontekst wybranego fragmentu.
+- [x] Cały przepływ działa bez wysyłania danych poza komputer użytkownika.
 
 ## 11. Rozszerzalność po MVP
 
@@ -179,5 +179,8 @@ Poniższe funkcje pozostają celowo poza pierwszą wersją: import źródeł inn
 - [x] Commit 2: inspektor formatu oraz raport z pierwszego eksportu bez ujawniania treści — zrealizowane w zbiorczym commicie `1c15682`.
 - [x] Commit 3: wspólny schemat SQLite, modele SQLAlchemy i migracje Alembic — zrealizowane w zbiorczym commicie `1c15682`.
 - [x] Commit 4: `ChatGPTExportAdapter`, idempotentny import i komplet danych syntetycznych — zrealizowane w zbiorczym commicie `1c15682`.
-- [x] Commit 5: FTS5, lokalne tematy i pierwszy pionowy wycinek API → graf — **zmiany przygotowane, jeszcze niezatwierdzone**.
-- [ ] Kolejne commity: czas, panel szczegółów, kontekst fragmentów i ergonomia grafu.
+- [x] Commit 5: FTS5, lokalne tematy i pierwszy pionowy wycinek API → graf — commit `6e6e7b7`.
+- [x] Normalizacja instrukcji i statusu projektu — commit `2b42516`.
+- [x] Typowane wyszukiwanie i szczegóły tematów — commit `47366ec`.
+- [x] Czasowy graf, panel szczegółów i kontekst — commit `1ea6133`.
+- [x] Compose, pełna walidacja i audyt Visual MVP — commit `2088608`.

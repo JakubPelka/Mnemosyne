@@ -1,4 +1,8 @@
-Poniżej gotowa instrukcja do wklejenia Codexowi jako pierwsze zadanie. Celowo ogranicza zakres, ale od początku prowadzi do działającego lokalnego webowego atlasu rozmów z siecią, czasem i dostępem do źródłowych fragmentów.
+# Historyczna specyfikacja projektu
+
+> Ten dokument archiwizuje pierwotny brief i może zawierać wcześniejsze lub zastąpione założenia. Nie jest aktywną instrukcją dla Codex. Aktualny stan i reguły opisują `AGENTS.md`, `docs/architecture.md`, `docs/roadmap.md` oraz ADR-y w `docs/adr/`.
+
+Poniżej znajduje się pierwotna instrukcja dla pierwszego etapu. Celowo ograniczała zakres, ale od początku prowadziła do działającego lokalnego webowego atlasu rozmów z siecią, czasem i dostępem do źródłowych fragmentów.
 
 ⸻
 
