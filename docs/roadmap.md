@@ -137,33 +137,33 @@ Ta lista odzwierciedla aktualne wymagania produktu. Trwałe instrukcje znajdują
 
 ## 9. Webowy interfejs MVP
 
-- [ ] Wyświetlić interaktywny graf z zoomem i przesuwaniem.
-- [ ] Dodać wyszukiwarkę tematów.
-- [ ] Dodać filtrowanie po liczbie wystąpień i sile relacji.
-- [ ] Dodać przełącznik ograniczający graf do sąsiadów wybranego węzła.
-- [ ] Dodać wybór zakresu dat.
-- [ ] Aktualizować graf i wielkość węzłów według wybranego okresu.
-- [ ] Przygotować architekturę pod późniejsze odtwarzanie miesiąc po miesiącu.
-- [ ] Dodać filtrowanie po `source_type`, początkowo z wartością `chatgpt`.
-- [ ] Po kliknięciu tematu pokazać liczbę rozmów i wiadomości oraz pierwsze i ostatnie wystąpienie.
-- [ ] Pokazać wykres intensywności tematu w czasie.
-- [ ] Pokazać najczęstsze tematy powiązane.
-- [ ] Pokazać listę rozmów i fragmentów źródłowych.
-- [ ] Po wybraniu fragmentu załadować jego treść, datę, tytuł rozmowy, stabilny identyfikator i ograniczony kontekst.
-- [ ] Nie ładować całych rozmów automatycznie.
+- [x] Wyświetlić interaktywny graf z zoomem i przesuwaniem.
+- [x] Dodać wyszukiwarkę tematów.
+- [x] Dodać filtrowanie po liczbie wystąpień i sile relacji.
+- [x] Dodać przełącznik ograniczający graf do sąsiadów wybranego węzła.
+- [x] Dodać wybór zakresu dat.
+- [x] Aktualizować graf i wielkość węzłów według wybranego okresu.
+- [x] Przygotować architekturę pod późniejsze odtwarzanie miesiąc po miesiącu.
+- [x] Dodać filtrowanie po `source_type`, początkowo z wartością `chatgpt`.
+- [x] Po kliknięciu tematu pokazać liczbę rozmów i wiadomości oraz pierwsze i ostatnie wystąpienie.
+- [x] Pokazać wykres intensywności tematu w czasie.
+- [x] Pokazać najczęstsze tematy powiązane.
+- [x] Pokazać listę rozmów i fragmentów źródłowych.
+- [x] Po wybraniu fragmentu załadować jego treść, datę, tytuł rozmowy, stabilny identyfikator i ograniczony kontekst.
+- [x] Nie ładować całych rozmów automatycznie.
 
 ## 10. Kryteria ukończenia MVP
 
 - [x] Użytkownik może wskazać lokalne archiwum lub rozpakowany eksport.
 - [x] Użytkownik może zaimportować rozmowy bez duplikatów.
-- [ ] Użytkownik może uruchomić aplikację lokalnie bez Dockera.
+- [x] Użytkownik może uruchomić aplikację lokalnie bez Dockera.
 - [ ] Użytkownik może uruchomić aplikację przez Docker Compose.
-- [ ] Użytkownik widzi sieć tematów.
-- [ ] Użytkownik ogranicza sieć do wybranego okresu.
-- [ ] Użytkownik wyszukuje temat.
-- [ ] Użytkownik wybiera węzeł i widzi powiązane rozmowy oraz fragmenty.
-- [ ] Użytkownik rozwija ograniczony kontekst wybranego fragmentu.
-- [ ] Cały przepływ działa bez wysyłania danych poza komputer użytkownika.
+- [x] Użytkownik widzi sieć tematów.
+- [x] Użytkownik ogranicza sieć do wybranego okresu.
+- [x] Użytkownik wyszukuje temat.
+- [x] Użytkownik wybiera węzeł i widzi powiązane rozmowy oraz fragmenty.
+- [x] Użytkownik rozwija ograniczony kontekst wybranego fragmentu.
+- [x] Cały przepływ działa bez wysyłania danych poza komputer użytkownika.
 
 ## 11. Rozszerzalność po MVP
 

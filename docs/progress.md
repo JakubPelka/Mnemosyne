@@ -149,4 +149,57 @@ Zbudować pojedynczy widok React/Sigma z filtrem czasu, wyborem tematu, wystąpi
 ### Commity
 
 - baza bloku: `2b42516`;
+- typowany kontrakt API: `47366ec`.
+
+## 2026-07-13 — Wizualny pionowy wycinek atlasu
+
+### Wykonane zadania
+
+- zbudowano responsywny, trzykolumnowy widok React z grafem Sigma/Graphology;
+- dodano wyszukiwanie tematów, filtry źródła, kategorii, progów, limitu i sąsiedztwa;
+- dodano wybór miesięcznego zakresu czasu i aktualizację intensywności grafu;
+- zaimplementowano wybór węzła, statystyki, wykres miesięczny, sąsiadów i paginowane fragmenty;
+- dodano ładowanie ograniczonego kontekstu po świadomym wyborze fragmentu;
+- obsłużono ładowanie, pusty wynik, błąd backendu, brak daty, brak fragmentów i długi tekst;
+- dodano stabilne pozycje, logarytmiczny rozmiar węzłów i adaptacyjny ForceAtlas2;
+- zweryfikowano render oraz pionowy przepływ na rzeczywistej lokalnej bazie bez raportowania treści.
+
+### Zmienione pliki
+
+- `frontend/src/App.tsx`, `api.ts`, `filters.ts`, `graph.ts`, `types.ts` i `styles.css`;
+- `frontend/src/components/`;
+- `frontend/tests/`;
+- `frontend/index.html`, `package.json`, `package-lock.json`, `tsconfig.json` i `vite.config.ts`;
+- `README.md`;
+- `docs/roadmap.md`, `docs/progress.md` i `docs/adr/0005-react-sigma-local-visualization.md`.
+
+### Testy i wyniki
+
+- `npm test`: 9 testów zaliczonych w 4 plikach;
+- `npm run build`: produkcyjny bundle zbudowany, 61 modułów;
+- integracja Vite proxy → rzeczywisty backend: HTTP 200 dla metadanych, grafu, szczegółów i wystąpień;
+- test wizualny headless przy 1440×900: układ i graf wyrenderowane poprawnie;
+- na realnych danych domyślny widok 100 węzłów przy progu `0.15` zawiera 99 relacji.
+
+### Decyzje techniczne
+
+- domyślny próg relacji `0.15` chroni pierwszy widok przed gęstym grafem, pozostając regulowany;
+- logarytmiczna skala wielkości ogranicza dominację największych tematów;
+- pozycje są deterministyczne i buforowane w sesji, a układ dużych grafów redukuje liczbę iteracji;
+- klient używa wyłącznie względnych adresów `/api`, bez CORS, zewnętrznych fontów, CDN i telemetrii.
+
+### Znane ograniczenia i otwarte kwestie
+
+- jakość 494 tematów potwierdza użyteczność grafu do oceny, ale widoczne są nadal ogólne słowa i tematy wielojęzyczne wymagające późniejszego strojenia stopwords;
+- przy ręcznym obniżeniu progu do zera 100 węzłów może utworzyć kilka tysięcy krawędzi;
+- Node.js nie jest zainstalowany na hoście testowym, dlatego testy uruchomiono w izolowanym kontenerze bez montowania `sources/` i `data/`;
+- uruchamianie całego stosu przez Compose pozostaje następnym blokiem.
+
+### Następny krok
+
+Dodać produkcyjne obrazy backendu i frontendu oraz lokalny Docker Compose z kontrolą gotowości.
+
+### Commity
+
+- baza bloku: `47366ec`;
 - bieżący blok: oczekuje na commit.
