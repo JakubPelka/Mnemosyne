@@ -23,10 +23,20 @@ from backend.app.models import (
     Topic,
     TopicTerm,
 )
+from backend.app.services.catalog import _is_exploration_neighbor
 from backend.app.services.import_chatgpt import import_chatgpt_export
 from backend.app.services.topics import build_topics
 
 FIXTURE_DIR = Path(__file__).parents[2] / "sample_data"
+
+
+def test_aggregate_neighbor_quality_filter_preserves_only_valid_concepts() -> None:
+    common = {"rejection_reason": None, "query_tokens": ("synthetic", "place")}
+    for value in ("https", "www", "com", "i", "synthetic place", "synthetic place portal"):
+        assert not _is_exploration_neighbor(value, approved_short=False, **common)
+    assert not _is_exploration_neighbor("xy", approved_short=False, **common)
+    assert _is_exploration_neighbor("xy", approved_short=True, **common)
+    assert _is_exploration_neighbor("spatial maps", approved_short=False, **common)
 
 
 @dataclass(frozen=True)
@@ -172,6 +182,8 @@ def test_term_graph_keeps_nodes_when_edges_are_filtered(api_fixture: ApiFixture)
 
 
 def test_aggregate_exploration_deduplicates_events(api_fixture: ApiFixture) -> None:
+    with api_fixture.make_session() as session:
+        before = (session.query(CandidateTerm).count(), session.query(Topic).count())
     response = api_fixture.client.get("/api/search/explore", params={"q": "garden"})
     assert response.status_code == 200
     body = response.json()
@@ -185,6 +197,9 @@ def test_aggregate_exploration_deduplicates_events(api_fixture: ApiFixture) -> N
     assert len(occurrence_ids) == len(set(occurrence_ids))
     matched_ids = {item["item_id"] for item in body["matched_terms"]}
     assert matched_ids.isdisjoint(item["topic_id"] for item in body["neighbors"])
+    with api_fixture.make_session() as session:
+        after = (session.query(CandidateTerm).count(), session.query(Topic).count())
+    assert after == before
     occurrence_ids = [item["event_id"] for item in body["occurrences"]["items"]]
     assert len(occurrence_ids) == len(set(occurrence_ids))
     matched_ids = {item["item_id"] for item in body["matched_terms"]}

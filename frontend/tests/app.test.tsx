@@ -1,7 +1,9 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 vi.mock("../src/components/GraphCanvas", () => ({
-  GraphCanvas: () => <div data-testid="synthetic-graph" />,
+  GraphCanvas: ({ data }: { data: { nodes: Array<{ category: string }> } }) => (
+    <div data-testid="synthetic-graph">{data.nodes.map((node) => node.category).join(",")}</div>
+  ),
 }));
 
 import App from "../src/App";
@@ -48,10 +50,12 @@ test("Enter explores all matches and changing the query clears the result", asyn
   fireEvent.change(input, { target: { value: "synthetic place" } });
   fireEvent.keyDown(input, { key: "Enter" });
   expect(await screen.findByText("WYNIK ZBIORCZY")).toBeInTheDocument();
+  expect(screen.getByTestId("synthetic-graph")).toHaveTextContent("aggregate_query");
   expect(screen.getByText("unikalnych wiadomości", { exact: false }).closest("span")).toHaveTextContent("2 unikalnych wiadomości");
   expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith("/api/search/explore?"))).toBe(true);
 
   fireEvent.change(input, { target: { value: "different query" } });
   await waitFor(() => expect(screen.queryByText("WYNIK ZBIORCZY")).not.toBeInTheDocument());
+  expect(screen.queryByTestId("synthetic-graph")).not.toBeInTheDocument();
   expect(screen.getByText(/wybierz węzeł/i)).toBeInTheDocument();
 });

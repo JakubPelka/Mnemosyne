@@ -22,6 +22,8 @@ from backend.app.models import (
     TopicRelation,
     TopicTerm,
 )
+from backend.app.nlp.lexicons import ALL_STOPWORDS, CODE_TOKENS, EXPORT_ARTIFACTS
+from backend.app.nlp.quality import normalize_term, term_tokens
 from backend.app.services.topics import (
     MonthlyIntensity,
     term_monthly_intensity,
@@ -1011,23 +1013,45 @@ def _aggregate_query_neighbors(
     }
     if not eligible_ids:
         return ()
-    metadata = dict(
-        session.execute(
-            select(CandidateTerm.term_id, CandidateTerm.term).where(
+    approved_short_ids = set(
+        session.scalars(
+            select(TopicTerm.term_id)
+            .join(Topic, Topic.topic_id == TopicTerm.topic_id)
+            .where(
+                TopicTerm.term_id.in_(eligible_ids),
+                Topic.analysis_run_id == active_analysis_run_subquery(),
+                Topic.is_active.is_(True),
+            )
+        )
+    )
+    metadata = {
+        term_id: (name, rejection_reason)
+        for term_id, name, rejection_reason in session.execute(
+            select(
+                CandidateTerm.term_id,
+                CandidateTerm.term,
+                CandidateTerm.rejection_reason,
+            ).where(
                 CandidateTerm.term_id.in_(eligible_ids),
                 CandidateTerm.is_active.is_(True),
+                CandidateTerm.quality_status.in_(("accepted", "manual")),
                 CandidateTerm.analysis_run_id == active_analysis_run_subquery(),
             )
-        ).all()
-    )
+        )
+    }
     ranked = sorted(
         metadata,
-        key=lambda term_id: (-len(term_events[term_id]), metadata[term_id]),
+        key=lambda term_id: (-len(term_events[term_id]), metadata[term_id][0]),
     )
     result = []
     for term_id in ranked:
-        name = metadata[term_id]
-        if term_id in excluded_term_ids or _phrase_matches_query(name, query_tokens):
+        name, rejection_reason = metadata[term_id]
+        if not _is_exploration_neighbor(
+            name,
+            rejection_reason=rejection_reason,
+            approved_short=term_id in approved_short_ids,
+            query_tokens=query_tokens,
+        ):
             continue
         message_count = len(term_events[term_id])
         context_count = len(term_contexts[term_id])
@@ -1044,6 +1068,39 @@ def _aggregate_query_neighbors(
         if len(result) >= limit:
             break
     return tuple(result)
+
+
+_DOMAIN_PARTS = frozenset({"ai", "app", "co", "com", "dev", "eu", "io", "net", "org", "pl", "se"})
+_URL_PARTS = frozenset({"http", "https", "www"})
+
+
+def _is_exploration_neighbor(
+    value: str,
+    *,
+    rejection_reason: str | None,
+    approved_short: bool,
+    query_tokens: tuple[str, ...],
+) -> bool:
+    normalized = normalize_term(value)
+    tokens = term_tokens(normalized)
+    if rejection_reason is not None or not tokens:
+        return False
+    if _phrase_matches_query(normalized, query_tokens):
+        return False
+    if any(
+        token in ALL_STOPWORDS
+        or token in CODE_TOKENS
+        or token in EXPORT_ARTIFACTS
+        or token in _URL_PARTS
+        or token in _DOMAIN_PARTS
+        for token in tokens
+    ):
+        return False
+    if "://" in normalized or normalized.startswith("www."):
+        return False
+    if any(len(token) < 3 for token in tokens) and not approved_short:
+        return False
+    return True
 
 
 def _phrase_matches_query(value: str, query_tokens: tuple[str, ...]) -> bool:

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { api } from "./api";
 import { DEFAULT_FILTERS, monthFromDate } from "./filters";
+import { aggregateNodeId, exploreGraph } from "./graph";
 import { FilterPanel } from "./components/FilterPanel";
 import { ContentSearchResults } from "./components/ContentSearchResults";
 import { GraphCanvas } from "./components/GraphCanvas";
@@ -226,6 +227,14 @@ export default function App() {
     setOccurrenceOffset(0);
   };
 
+  const displayedGraph = useMemo(
+    () => aggregate ? exploreGraph(aggregate) : graph,
+    [aggregate, graph],
+  );
+  const selectedGraphNodeId = aggregate
+    ? aggregateNodeId(aggregate.normalized_query)
+    : selectedTopicId;
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -272,11 +281,11 @@ export default function App() {
 
         <section className="graph-panel" aria-label="Graf terminów i tematów">
           <div className="graph-caption">
-            <span>{graph?.nodes.length ?? 0} węzłów · {graph?.edges.length ?? 0} relacji</span>
-            <span>{filters.graphView === "topics" ? "tematy beta" : "terminy"} · rozmiar = intensywność okresu</span>
+            <span>{displayedGraph?.nodes.length ?? 0} węzłów · {displayedGraph?.edges.length ?? 0} relacji</span>
+            <span>{aggregate ? "wynik zbiorczy" : filters.graphView === "topics" ? "tematy beta" : "terminy"} · rozmiar = intensywność okresu</span>
           </div>
-          <StatusPanel loading={loading} error={error} empty={!loading && !error && graph?.nodes.length === 0} />
-          {graph && graph.nodes.length > 0 && <GraphCanvas data={graph} selectedTopicId={selectedTopicId} onSelect={selectGraphNode} />}
+          <StatusPanel loading={loading && !aggregate} error={error} empty={!loading && !error && displayedGraph?.nodes.length === 0} />
+          {displayedGraph && displayedGraph.nodes.length > 0 && <GraphCanvas data={displayedGraph} selectedTopicId={selectedGraphNodeId} onSelect={(nodeId) => { if (!nodeId.startsWith("query:")) selectGraphNode(nodeId); }} />}
         </section>
 
         <aside className="right-panel">

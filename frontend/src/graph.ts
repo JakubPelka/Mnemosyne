@@ -1,7 +1,7 @@
 import Graph from "graphology";
 import forceAtlas2 from "graphology-layout-forceatlas2";
 
-import type { GraphResponse } from "./types";
+import type { ExploreResult, GraphResponse } from "./types";
 
 export interface Position {
   x: number;
@@ -9,6 +9,64 @@ export interface Position {
 }
 
 const CATEGORY_COLORS = ["#68d8c8", "#f3b562", "#8aa8ff", "#e58cba", "#b9d96c"];
+
+export function aggregateNodeId(normalizedQuery: string): string {
+  return `query:${normalizedQuery}`;
+}
+
+export function exploreGraph(result: ExploreResult): GraphResponse {
+  const queryId = aggregateNodeId(result.normalized_query);
+  const exactMatches = [
+    ...result.matched_topics,
+    ...result.matched_terms.slice(0, 5),
+  ];
+  const nodes = new Map(
+    exactMatches.map((item) => [item.item_id, {
+      topic_id: item.item_id,
+      name: item.name,
+      category: item.layer === "topics" ? "topic" : "term",
+      message_count: item.message_count,
+      context_count: item.context_count,
+      first_seen_at: result.first_seen_at,
+      last_seen_at: result.last_seen_at,
+    }]),
+  );
+  for (const neighbor of result.neighbors) {
+    if (!nodes.has(neighbor.topic_id)) {
+      nodes.set(neighbor.topic_id, {
+        topic_id: neighbor.topic_id,
+        name: neighbor.name,
+        category: neighbor.category,
+        message_count: neighbor.message_count,
+        context_count: neighbor.context_count,
+        first_seen_at: result.first_seen_at,
+        last_seen_at: result.last_seen_at,
+      });
+    }
+  }
+  const relatedNodes = [...nodes.values()];
+  return {
+    nodes: [{
+      topic_id: queryId,
+      name: result.query,
+      category: "aggregate_query",
+      message_count: result.unique_event_count,
+      context_count: result.unique_context_count,
+      first_seen_at: result.first_seen_at,
+      last_seen_at: result.last_seen_at,
+    }, ...relatedNodes],
+    edges: relatedNodes.map((node) => {
+      const neighbor = result.neighbors.find((item) => item.topic_id === node.topic_id);
+      return {
+        source_topic_id: queryId,
+        target_topic_id: node.topic_id,
+        message_count: neighbor?.message_count ?? node.message_count,
+        context_count: neighbor?.context_count ?? node.context_count,
+        weight: neighbor?.weight ?? 1,
+      };
+    }),
+  };
+}
 
 export function toGraphology(
   response: GraphResponse,
@@ -30,7 +88,7 @@ export function toGraphology(
         node.topic_id === selectedTopicId || node.message_count >= (importantThreshold ?? Infinity)
           ? node.name
           : "",
-      color: node.topic_id === selectedTopicId ? "#fff2a8" : categoryColor(node.category),
+      color: node.category === "aggregate_query" ? "#fff2a8" : node.topic_id === selectedTopicId ? "#fff2a8" : categoryColor(node.category),
       highlighted: node.topic_id === selectedTopicId,
       forceLabel: node.topic_id === selectedTopicId,
       category: node.category,
