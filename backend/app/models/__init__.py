@@ -5,6 +5,7 @@ from .chatgpt import ChatGPTConversationModel, ChatGPTMessageModel
 from .core import (
     AnalysisRun,
     CandidateTerm,
+    CandidateTermRelation,
     Entity,
     Event,
     EventSegment,
@@ -26,6 +27,7 @@ __all__ = [
     "ChatGPTConversationModel",
     "ChatGPTMessageModel",
     "CandidateTerm",
+    "CandidateTermRelation",
     "Entity",
     "Event",
     "EventSegment",

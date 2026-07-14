@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from backend.app.api.dependencies import get_session
 from backend.app.api.schemas import (
     EventExcerptResponse,
+    ExploreMatchResponse,
+    ExploreSearchResponse,
     GraphEdgeResponse,
     GraphNodeResponse,
     GraphResponse,
@@ -34,6 +36,7 @@ from backend.app.services.catalog import (
     get_topic_detail,
     get_topic_occurrences,
     get_topic_terms,
+    explore_search_query,
     search_events,
     search_catalog,
     search_topics,
@@ -59,8 +62,10 @@ def meta(session: DatabaseSession) -> MetaResponse:
         topic_categories=list(value.topic_categories),
         counts=MetaCountsResponse(
             events=value.event_count,
+            candidate_terms=value.candidate_term_count,
             topics=value.topic_count,
-            relations=value.relation_count,
+            candidate_term_relations=value.candidate_term_relation_count,
+            topic_relations=value.topic_relation_count,
         ),
         api_version=API_VERSION,
     )
@@ -134,6 +139,23 @@ def topic_search(
     )
 
 
+@router.get("/terms/search", response_model=TopicSearchResponse)
+def term_search(
+    session: DatabaseSession,
+    q: Annotated[str, Query(min_length=1, max_length=200)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    privacy_level: PrivacyLevel = "private",
+) -> TopicSearchResponse:
+    return TopicSearchResponse(
+        items=[
+            TopicSearchItemResponse(**asdict(item))
+            for item in search_catalog(
+                session, q, layer="terms", limit=limit, privacy_level=privacy_level
+            )
+        ]
+    )
+
+
 @router.get("/search/resolve", response_model=SearchResolutionResponse)
 def resolve_search(
     session: DatabaseSession,
@@ -146,6 +168,44 @@ def resolve_search(
     return SearchResolutionResponse(
         match_kind=result.match_kind,
         item=TopicSearchItemResponse(**asdict(result.item)),
+    )
+
+
+@router.get("/search/explore", response_model=ExploreSearchResponse)
+def explore_search(
+    session: DatabaseSession,
+    q: Annotated[str, Query(min_length=1, max_length=200)],
+    start: datetime | None = None,
+    end: datetime | None = None,
+    source_type: str | None = None,
+    content_scope: Literal["all", "prose", "code", "commands", "logs"] = "prose",
+    privacy_level: PrivacyLevel = "private",
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> ExploreSearchResponse:
+    result = explore_search_query(
+        session,
+        q,
+        start=start,
+        end=end,
+        source_type=source_type,
+        content_scope=content_scope,
+        privacy_level=privacy_level,
+        limit=limit,
+        offset=offset,
+    )
+    return ExploreSearchResponse(
+        query=result.query,
+        normalized_query=result.normalized_query,
+        matched_terms=[ExploreMatchResponse(**asdict(item)) for item in result.matched_terms],
+        matched_topics=[ExploreMatchResponse(**asdict(item)) for item in result.matched_topics],
+        unique_event_count=result.unique_event_count,
+        unique_context_count=result.unique_context_count,
+        first_seen_at=result.first_seen_at,
+        last_seen_at=result.last_seen_at,
+        monthly_intensity=[MonthlyIntensityResponse(**asdict(item)) for item in result.months],
+        neighbors=[TopicNeighborResponse(**asdict(item)) for item in result.neighbors],
+        occurrences=_event_page_response(result.occurrences),
     )
 
 

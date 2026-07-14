@@ -211,6 +211,23 @@ class EventCandidateTerm(Base):
     weight: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
 
 
+class CandidateTermRelation(Base):
+    __tablename__ = "candidate_term_relations"
+    __table_args__ = (UniqueConstraint("analysis_run_id", "source_term_id", "target_term_id"),)
+
+    relation_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    analysis_run_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    source_term_id: Mapped[str] = mapped_column(
+        ForeignKey("candidate_terms.term_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    target_term_id: Mapped[str] = mapped_column(
+        ForeignKey("candidate_terms.term_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    shared_event_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    shared_context_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    weight: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+
 class EventTopic(Base):
     __tablename__ = "event_topics"
 

@@ -44,6 +44,7 @@ def main() -> int:
                 "topics": result.topics,
                 "topic_terms": result.topic_terms,
                 "assignments": result.assignments,
+                "candidate_relations": result.candidate_relations,
                 "relations": result.relations,
                 "rejection_counts": result.rejection_counts,
             }

@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.models import (
     CandidateTerm,
+    CandidateTermRelation,
     Event,
     EventCandidateTerm,
     EventSegment,
@@ -53,6 +54,7 @@ class TopicBuildResult:
     topics: int
     topic_terms: int
     assignments: int
+    candidate_relations: int
     relations: int
     rejection_counts: dict[str, int]
 
@@ -182,6 +184,13 @@ def build_topics(
             insert(EventCandidateTerm),
             [{**row, "analysis_run_id": run.analysis_run_id} for row in candidate_assignments],
         )
+    candidate_relation_count = _persist_candidate_relations(
+        session,
+        documents=documents,
+        metrics=metrics,
+        assignments=candidate_assignments,
+        analysis_run_id=run.analysis_run_id,
+    )
 
     definitions = _build_topic_definitions(
         metrics,
@@ -212,6 +221,7 @@ def build_topics(
         topics=result[0],
         topic_terms=result[1],
         assignments=result[2],
+        candidate_relations=candidate_relation_count,
         relations=result[3],
         rejection_counts=dict(sorted(rejection_counts.items())),
     )
@@ -743,6 +753,7 @@ def _topic_alias_id(topic_id: str, alias: str) -> str:
 
 
 def _clear_derived_analysis(session: Session) -> None:
+    session.execute(delete(CandidateTermRelation))
     session.execute(delete(TopicRelation))
     session.execute(delete(EventTopic))
     session.execute(delete(TopicAlias))
@@ -751,3 +762,61 @@ def _clear_derived_analysis(session: Session) -> None:
     session.execute(delete(Topic))
     session.execute(delete(CandidateTerm))
     session.execute(delete(EventSegment))
+
+
+def _persist_candidate_relations(
+    session: Session,
+    *,
+    documents: list[_Document],
+    metrics: dict[str, _CandidateMetrics],
+    assignments: list[dict[str, object]],
+    analysis_run_id: str,
+) -> int:
+    event_contexts = {document.event_id: document.context_id for document in documents}
+    accepted_term_ids = {
+        stable_term_id(term)
+        for term, metric in metrics.items()
+        if metric.quality.status == "accepted"
+    }
+    event_terms: dict[str, set[str]] = defaultdict(set)
+    term_contexts: dict[str, set[str]] = defaultdict(set)
+    for assignment in assignments:
+        event_id = str(assignment["event_id"])
+        term_id = str(assignment["term_id"])
+        if term_id not in accepted_term_ids:
+            continue
+        event_terms[event_id].add(term_id)
+        term_contexts[term_id].add(event_contexts[event_id])
+
+    shared_events: Counter[tuple[str, str]] = Counter()
+    shared_contexts: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for event_id, term_ids in event_terms.items():
+        for pair in combinations(sorted(term_ids), 2):
+            shared_events[pair] += 1
+            shared_contexts[pair].add(event_contexts[event_id])
+
+    rows = []
+    for (source_id, target_id), event_count in shared_events.items():
+        context_count = len(shared_contexts[(source_id, target_id)])
+        if context_count < 2:
+            continue
+        denominator = math.sqrt(len(term_contexts[source_id]) * len(term_contexts[target_id]))
+        rows.append(
+            {
+                "relation_id": _candidate_relation_id(source_id, target_id),
+                "analysis_run_id": analysis_run_id,
+                "source_term_id": source_id,
+                "target_term_id": target_id,
+                "shared_event_count": event_count,
+                "shared_context_count": context_count,
+                "weight": context_count / denominator if denominator else 0.0,
+            }
+        )
+    if rows:
+        session.execute(insert(CandidateTermRelation), rows)
+    return len(rows)
+
+
+def _candidate_relation_id(source_term_id: str, target_term_id: str) -> str:
+    value = f"{source_term_id}:{target_term_id}"
+    return f"candidate-relation-{hashlib.sha256(value.encode()).hexdigest()}"

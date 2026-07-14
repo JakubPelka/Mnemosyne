@@ -9,7 +9,15 @@ from pathlib import Path
 from sqlalchemy import func, select
 
 from backend.app.database import create_sqlite_engine, session_factory
-from backend.app.models import AnalysisRun, CandidateTerm, Event, EventSegment, Topic, TopicRelation
+from backend.app.models import (
+    AnalysisRun,
+    CandidateTerm,
+    CandidateTermRelation,
+    Event,
+    EventSegment,
+    Topic,
+    TopicRelation,
+)
 from backend.app.services.topics import build_topics
 
 
@@ -55,6 +63,7 @@ def _counts(session: object) -> dict[str, int]:
         "candidate_terms": _count(session, CandidateTerm),
         "topics": _count(session, Topic),
         "relations": _count(session, TopicRelation),
+        "candidate_term_relations": _count(session, CandidateTermRelation),
         "analysis_runs": _count(session, AnalysisRun),
         "active_analysis_runs": int(
             session.scalar(

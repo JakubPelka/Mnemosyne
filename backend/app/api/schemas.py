@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime
 
 from pydantic import BaseModel, Field
@@ -55,8 +57,10 @@ class MessageContextResponse(BaseModel):
 
 class MetaCountsResponse(BaseModel):
     events: int
+    candidate_terms: int
     topics: int
-    relations: int
+    candidate_term_relations: int
+    topic_relations: int
 
 
 class MetaResponse(BaseModel):
@@ -86,6 +90,28 @@ class TopicSearchResponse(BaseModel):
 class SearchResolutionResponse(BaseModel):
     match_kind: str
     item: TopicSearchItemResponse
+
+
+class ExploreMatchResponse(BaseModel):
+    item_id: str
+    name: str
+    layer: str
+    message_count: int
+    context_count: int
+
+
+class ExploreSearchResponse(BaseModel):
+    query: str
+    normalized_query: str
+    matched_terms: list[ExploreMatchResponse]
+    matched_topics: list[ExploreMatchResponse]
+    unique_event_count: int
+    unique_context_count: int
+    first_seen_at: datetime | None
+    last_seen_at: datetime | None
+    monthly_intensity: list[MonthlyIntensityResponse]
+    neighbors: list[TopicNeighborResponse]
+    occurrences: PaginatedEventExcerptResponse
 
 
 class TopicTermResponse(BaseModel):

@@ -81,10 +81,13 @@ def test_response_models_are_exposed_in_openapi(api_fixture: ApiFixture) -> None
         "/api/graph",
         "/api/topics",
         "/api/topics/search",
+        "/api/terms/search",
         "/api/topics/{topic_id}",
         "/api/topics/{topic_id}/terms",
         "/api/topics/{topic_id}/occurrences",
         "/api/search/events",
+        "/api/search/explore",
+        "/api/search/resolve",
         "/api/messages/{event_id}/context",
     ):
         response_schema = schema["paths"][path]["get"]["responses"]["200"]["content"][
@@ -98,12 +101,14 @@ def test_meta_returns_only_structural_metadata(api_fixture: ApiFixture) -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["api_version"] == "0.4.0"
+    assert body["api_version"] == "0.5.0"
     assert body["source_types"] == ["chatgpt"]
     assert body["topic_categories"] == ["topic"]
     assert body["counts"]["events"] == 11
     assert body["counts"]["topics"] > 0
-    assert body["counts"]["relations"] == 0
+    assert body["counts"]["candidate_terms"] > 0
+    assert body["counts"]["candidate_term_relations"] >= 0
+    assert body["counts"]["topic_relations"] == 0
     assert set(body) == {
         "earliest_event_at",
         "latest_event_at",
@@ -150,6 +155,47 @@ def test_topic_search_and_detail(api_fixture: ApiFixture) -> None:
     assert body["neighbors"] == []
     assert missing.status_code == 404
     assert missing.json()["detail"] == "topic_not_found"
+
+
+def test_term_graph_keeps_nodes_when_edges_are_filtered(api_fixture: ApiFixture) -> None:
+    response = api_fixture.client.get(
+        "/api/graph",
+        params={
+            "layer": "terms",
+            "node_limit": 30,
+            "min_occurrences": 1,
+            "min_relation_weight": 1.0,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["nodes"]
+
+
+def test_aggregate_exploration_deduplicates_events(api_fixture: ApiFixture) -> None:
+    response = api_fixture.client.get("/api/search/explore", params={"q": "garden"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["normalized_query"] == "garden"
+    assert len(body["matched_terms"]) >= 2
+    assert body["unique_event_count"] >= 1
+    assert body["unique_event_count"] <= sum(
+        item["message_count"] for item in body["matched_terms"]
+    )
+    occurrence_ids = [item["event_id"] for item in body["occurrences"]["items"]]
+    assert len(occurrence_ids) == len(set(occurrence_ids))
+    matched_ids = {item["item_id"] for item in body["matched_terms"]}
+    assert matched_ids.isdisjoint(item["topic_id"] for item in body["neighbors"])
+    occurrence_ids = [item["event_id"] for item in body["occurrences"]["items"]]
+    assert len(occurrence_ids) == len(set(occurrence_ids))
+    matched_ids = {item["item_id"] for item in body["matched_terms"]}
+    assert not matched_ids & {item["topic_id"] for item in body["neighbors"]}
+
+
+def test_term_search_alias_endpoint_is_case_insensitive(api_fixture: ApiFixture) -> None:
+    lower = api_fixture.client.get("/api/terms/search", params={"q": "garden"})
+    upper = api_fixture.client.get("/api/terms/search", params={"q": "GARDEN"})
+    assert lower.status_code == upper.status_code == 200
+    assert lower.json() == upper.json()
 
 
 def test_topic_list_terms_and_diagnostic_graph(api_fixture: ApiFixture) -> None:

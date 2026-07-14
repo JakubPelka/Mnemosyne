@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.models import (
     CandidateTerm,
+    CandidateTermRelation,
     ChatGPTMessageModel,
     Event,
     EventCandidateTerm,
@@ -39,8 +40,10 @@ class CatalogMeta:
     source_types: tuple[str, ...]
     topic_categories: tuple[str, ...]
     event_count: int
+    candidate_term_count: int
     topic_count: int
-    relation_count: int
+    candidate_term_relation_count: int
+    topic_relation_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +116,30 @@ class SearchResolution:
     item: TopicSummary
 
 
+@dataclass(frozen=True, slots=True)
+class ExploreMatch:
+    item_id: str
+    name: str
+    layer: str
+    message_count: int
+    context_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ExploreResult:
+    query: str
+    normalized_query: str
+    matched_terms: tuple[ExploreMatch, ...]
+    matched_topics: tuple[ExploreMatch, ...]
+    unique_event_count: int
+    unique_context_count: int
+    first_seen_at: datetime | None
+    last_seen_at: datetime | None
+    months: tuple[MonthlyIntensity, ...]
+    neighbors: tuple[TopicNeighbor, ...]
+    occurrences: EventExcerptPage
+
+
 def get_catalog_meta(session: Session) -> CatalogMeta:
     active = Event.is_active.is_(True)
     earliest, latest, event_count = session.execute(
@@ -146,7 +173,20 @@ def get_catalog_meta(session: Session) -> CatalogMeta:
             Topic.analysis_run_id == active_analysis_run_subquery(),
         )
     )
-    relation_count = session.scalar(
+    candidate_term_count = session.scalar(
+        select(func.count())
+        .select_from(CandidateTerm)
+        .where(
+            CandidateTerm.is_active.is_(True),
+            CandidateTerm.analysis_run_id == active_analysis_run_subquery(),
+        )
+    )
+    candidate_term_relation_count = session.scalar(
+        select(func.count())
+        .select_from(CandidateTermRelation)
+        .where(CandidateTermRelation.analysis_run_id == active_analysis_run_subquery())
+    )
+    topic_relation_count = session.scalar(
         select(func.count())
         .select_from(TopicRelation)
         .join(Topic, Topic.topic_id == TopicRelation.source_topic_id)
@@ -161,8 +201,10 @@ def get_catalog_meta(session: Session) -> CatalogMeta:
         source_types=tuple(source_types),
         topic_categories=tuple(categories),
         event_count=int(event_count or 0),
+        candidate_term_count=int(candidate_term_count or 0),
         topic_count=int(topic_count or 0),
-        relation_count=int(relation_count or 0),
+        candidate_term_relation_count=int(candidate_term_relation_count or 0),
+        topic_relation_count=int(topic_relation_count or 0),
     )
 
 
@@ -313,6 +355,176 @@ def resolve_search_query(
     if terms:
         return SearchResolution("prefix_term", terms[0])
     return None
+
+
+def explore_search_query(
+    session: Session,
+    query: str,
+    *,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    source_type: str | None = None,
+    content_scope: str = "prose",
+    privacy_level: str = "private",
+    limit: int = 20,
+    offset: int = 0,
+    neighbor_limit: int = 12,
+) -> ExploreResult:
+    normalized = " ".join(query.casefold().split())
+    query_tokens = tuple(_SEARCH_TOKEN.findall(normalized))
+    if not query_tokens:
+        raise ValueError("search_query_has_no_terms")
+
+    active_run = active_analysis_run_subquery()
+    term_rows = session.execute(
+        select(
+            CandidateTerm.term_id,
+            CandidateTerm.term,
+            CandidateTerm.message_count,
+            CandidateTerm.context_count,
+        ).where(
+            CandidateTerm.is_active.is_(True),
+            CandidateTerm.analysis_run_id == active_run,
+        )
+    )
+    matched_terms = tuple(
+        ExploreMatch(term_id, name, "terms", message_count, context_count)
+        for term_id, name, message_count, context_count in term_rows
+        if _phrase_matches_query(name, query_tokens)
+    )
+    matched_term_ids = {item.item_id for item in matched_terms}
+
+    topic_rows = session.execute(
+        select(
+            Topic.topic_id,
+            Topic.name,
+            Topic.message_count,
+            Topic.conversation_count,
+            TopicAlias.normalized_alias,
+        )
+        .outerjoin(TopicAlias, TopicAlias.topic_id == Topic.topic_id)
+        .where(Topic.is_active.is_(True), Topic.analysis_run_id == active_run)
+    )
+    topic_matches: dict[str, ExploreMatch] = {}
+    for topic_id, name, message_count, context_count, alias in topic_rows:
+        if _phrase_matches_query(name, query_tokens) or (
+            alias and _phrase_matches_query(alias, query_tokens)
+        ):
+            topic_matches[topic_id] = ExploreMatch(
+                topic_id, name, "topics", message_count, context_count
+            )
+    matched_topics = tuple(topic_matches.values())
+    matched_topic_ids = set(topic_matches)
+
+    event_ids: set[str] = set()
+    if matched_term_ids:
+        event_ids.update(
+            session.scalars(
+                select(EventCandidateTerm.event_id).where(
+                    EventCandidateTerm.term_id.in_(matched_term_ids),
+                    EventCandidateTerm.analysis_run_id == active_run,
+                )
+            )
+        )
+    if matched_topic_ids:
+        event_ids.update(
+            session.scalars(
+                select(EventTopic.event_id).where(
+                    EventTopic.topic_id.in_(matched_topic_ids),
+                    EventTopic.analysis_run_id == active_run,
+                )
+            )
+        )
+    scope_types = _explore_scope_types(content_scope)
+    event_ids.update(
+        row[0]
+        for row in session.execute(
+            text(
+                "SELECT DISTINCT event_segments.event_id FROM event_segments_fts "
+                "JOIN event_segments ON event_segments.rowid=event_segments_fts.rowid "
+                "WHERE event_segments_fts MATCH :query "
+                "AND event_segments.analysis_run_id=(SELECT analysis_run_id FROM analysis_runs "
+                "WHERE is_active=1 AND status='completed' LIMIT 1) "
+                "AND event_segments.segment_type IN ("
+                + ",".join(f"'{value}'" for value in scope_types)
+                + ")"
+            ),
+            {"query": _fts_query(normalized)},
+        )
+    )
+
+    event_statement = (
+        select(Event.event_id, Event.context_id, Event.timestamp_start)
+        .join(Source, Source.source_id == Event.source_id)
+        .where(
+            Event.event_id.in_(event_ids or {"__none__"}),
+            Event.is_active.is_(True),
+            Event.privacy_level == privacy_level,
+        )
+    )
+    if start is not None:
+        event_statement = event_statement.where(Event.timestamp_start >= start)
+    if end is not None:
+        event_statement = event_statement.where(Event.timestamp_start < end)
+    if source_type is not None:
+        event_statement = event_statement.where(Source.source_type == source_type)
+    event_rows = session.execute(event_statement).all()
+    filtered_event_ids = {row[0] for row in event_rows}
+    contexts = {context_id or event_id for event_id, context_id, _timestamp in event_rows}
+    timestamps = [timestamp for _event_id, _context_id, timestamp in event_rows if timestamp]
+    month_counts = Counter(timestamp.strftime("%Y-%m") for timestamp in timestamps)
+
+    occurrence_rows = session.execute(
+        select(
+            Event.event_id,
+            Event.timestamp_start,
+            ChatGPTMessageModel.role,
+            Event.title,
+            Event.text,
+            Event.source_record_id,
+        )
+        .outerjoin(ChatGPTMessageModel, ChatGPTMessageModel.event_id == Event.event_id)
+        .where(Event.event_id.in_(filtered_event_ids or {"__none__"}))
+        .order_by(Event.timestamp_start.desc(), Event.event_id)
+        .limit(limit)
+        .offset(offset)
+    )
+    occurrences = EventExcerptPage(
+        items=tuple(
+            EventExcerpt(event_id, occurred_at, role, title, _snippet(body), source_record_id)
+            for event_id, occurred_at, role, title, body, source_record_id in occurrence_rows
+        ),
+        total=len(filtered_event_ids),
+        limit=limit,
+        offset=offset,
+    )
+    return ExploreResult(
+        query=query,
+        normalized_query=normalized,
+        matched_terms=tuple(
+            sorted(matched_terms, key=lambda item: (-item.message_count, item.name))
+        ),
+        matched_topics=tuple(
+            sorted(matched_topics, key=lambda item: (-item.message_count, item.name))
+        ),
+        unique_event_count=len(filtered_event_ids),
+        unique_context_count=len(contexts),
+        first_seen_at=min(timestamps) if timestamps else None,
+        last_seen_at=max(timestamps) if timestamps else None,
+        months=tuple(
+            MonthlyIntensity(month, count, float(count))
+            for month, count in sorted(month_counts.items())
+        ),
+        neighbors=_aggregate_query_neighbors(
+            session,
+            filtered_event_ids,
+            excluded_term_ids=matched_term_ids,
+            query_tokens=query_tokens,
+            privacy_level=privacy_level,
+            limit=neighbor_limit,
+        ),
+        occurrences=occurrences,
+    )
 
 
 def get_term_detail(
@@ -759,6 +971,102 @@ def _term_neighbors(
         for neighbor_id, name, message_count, context_count in rows
     ]
     return tuple(result)
+
+
+def _aggregate_query_neighbors(
+    session: Session,
+    event_ids: set[str],
+    *,
+    excluded_term_ids: set[str],
+    query_tokens: tuple[str, ...],
+    privacy_level: str,
+    limit: int,
+) -> tuple[TopicNeighbor, ...]:
+    if not event_ids:
+        return ()
+    assignment_rows = session.execute(
+        select(
+            EventCandidateTerm.term_id,
+            Event.event_id,
+            func.coalesce(Event.context_id, Event.event_id),
+        )
+        .select_from(EventCandidateTerm)
+        .join(Event, Event.event_id == EventCandidateTerm.event_id)
+        .where(
+            EventCandidateTerm.event_id.in_(event_ids),
+            EventCandidateTerm.analysis_run_id == active_analysis_run_subquery(),
+            Event.is_active.is_(True),
+            Event.privacy_level == privacy_level,
+        )
+    )
+    term_events: dict[str, set[str]] = defaultdict(set)
+    term_contexts: dict[str, set[str]] = defaultdict(set)
+    for term_id, event_id, context_id in assignment_rows:
+        term_events[term_id].add(event_id)
+        term_contexts[term_id].add(context_id)
+    eligible_ids = {
+        term_id
+        for term_id, contexts in term_contexts.items()
+        if len(contexts) >= 2 and term_id not in excluded_term_ids
+    }
+    if not eligible_ids:
+        return ()
+    metadata = dict(
+        session.execute(
+            select(CandidateTerm.term_id, CandidateTerm.term).where(
+                CandidateTerm.term_id.in_(eligible_ids),
+                CandidateTerm.is_active.is_(True),
+                CandidateTerm.analysis_run_id == active_analysis_run_subquery(),
+            )
+        ).all()
+    )
+    ranked = sorted(
+        metadata,
+        key=lambda term_id: (-len(term_events[term_id]), metadata[term_id]),
+    )
+    result = []
+    for term_id in ranked:
+        name = metadata[term_id]
+        if term_id in excluded_term_ids or _phrase_matches_query(name, query_tokens):
+            continue
+        message_count = len(term_events[term_id])
+        context_count = len(term_contexts[term_id])
+        result.append(
+            TopicNeighbor(
+                topic_id=term_id,
+                name=name,
+                category="term",
+                message_count=message_count,
+                context_count=context_count,
+                weight=context_count / max(1, len(event_ids)),
+            )
+        )
+        if len(result) >= limit:
+            break
+    return tuple(result)
+
+
+def _phrase_matches_query(value: str, query_tokens: tuple[str, ...]) -> bool:
+    tokens = tuple(_SEARCH_TOKEN.findall(value.casefold()))
+    if not tokens or len(tokens) < len(query_tokens):
+        return False
+    width = len(query_tokens)
+    return any(
+        tokens[index : index + width] == query_tokens for index in range(len(tokens) - width + 1)
+    )
+
+
+def _explore_scope_types(content_scope: str) -> tuple[str, ...]:
+    scopes = {
+        "prose": ("prose", "quote"),
+        "code": ("code", "inline_code"),
+        "commands": ("shell_command",),
+        "logs": ("log",),
+        "all": ("prose", "quote", "code", "inline_code", "shell_command", "log"),
+    }
+    if content_scope not in scopes:
+        raise ValueError("invalid_content_scope")
+    return scopes[content_scope]
 
 
 def _escape_like(value: str) -> str:

@@ -9,7 +9,15 @@ from itertools import combinations
 from sqlalchemy import distinct, func, select
 from sqlalchemy.orm import Session
 
-from backend.app.models import CandidateTerm, Event, EventCandidateTerm, EventTopic, Source, Topic
+from backend.app.models import (
+    CandidateTerm,
+    CandidateTermRelation,
+    Event,
+    EventCandidateTerm,
+    EventTopic,
+    Source,
+    Topic,
+)
 from backend.app.services.analysis_runs import active_analysis_run_id
 
 
@@ -272,15 +280,56 @@ def get_candidate_term_graph(
         (event_id, context_id, timestamp, term_id, term, f"candidate_{status}")
         for event_id, context_id, timestamp, term_id, term, status in session.execute(statement)
     )
-    return _assemble_graph(
+    use_stored_relations = (
+        start is None
+        and end is None
+        and source_type is None
+        and privacy_level == "private"
+    )
+    graph = _assemble_graph(
         rows,
         min_occurrences=min_occurrences,
         min_edge_messages=min_edge_messages,
         min_relation_weight=min_relation_weight,
         node_limit=node_limit,
         selected_topic_id=selected_term_id,
-        neighbors_only=neighbors_only,
+        neighbors_only=neighbors_only and not use_stored_relations,
     )
+    if not use_stored_relations:
+        return graph
+    visible_set = {node.topic_id for node in graph.nodes}
+    relation_rows = session.execute(
+        select(
+            CandidateTermRelation.source_term_id,
+            CandidateTermRelation.target_term_id,
+            CandidateTermRelation.shared_event_count,
+            CandidateTermRelation.shared_context_count,
+            CandidateTermRelation.weight,
+        ).where(
+            CandidateTermRelation.analysis_run_id == analysis_run_id,
+            CandidateTermRelation.source_term_id.in_(visible_set),
+            CandidateTermRelation.target_term_id.in_(visible_set),
+            CandidateTermRelation.shared_event_count >= min_edge_messages,
+            CandidateTermRelation.weight >= min_relation_weight,
+        )
+    )
+    edges = tuple(TopicGraphEdge(*row) for row in relation_rows)
+    nodes = graph.nodes
+    if neighbors_only and selected_term_id is not None:
+        neighbor_ids = {selected_term_id}
+        for edge in edges:
+            if edge.source_topic_id == selected_term_id:
+                neighbor_ids.add(edge.target_topic_id)
+            if edge.target_topic_id == selected_term_id:
+                neighbor_ids.add(edge.source_topic_id)
+        nodes = tuple(node for node in nodes if node.topic_id in neighbor_ids)
+        node_ids = {node.topic_id for node in nodes}
+        edges = tuple(
+            edge
+            for edge in edges
+            if edge.source_topic_id in node_ids and edge.target_topic_id in node_ids
+        )
+    return TopicGraph(nodes=nodes, edges=edges)
 
 
 def _assemble_graph(

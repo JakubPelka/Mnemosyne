@@ -12,6 +12,7 @@ from backend.app.database import create_sqlite_engine, session_factory
 from backend.app.models import (
     AnalysisRun,
     CandidateTerm,
+    CandidateTermRelation,
     Event,
     EventCandidateTerm,
     EventSegment,
@@ -23,6 +24,8 @@ from backend.app.models import (
 )
 from backend.app.nlp.quality import normalize_term
 from backend.app.services.catalog import resolve_search_query
+from backend.app.services.analysis_runs import active_analysis_run_id
+from backend.app.services.graph import get_candidate_term_graph, get_topic_graph
 
 
 def main() -> int:
@@ -35,15 +38,22 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--summary", action="store_true")
     mode.add_argument("--term")
+    mode.add_argument("--graph", choices=("terms", "topics"))
     args = parser.parse_args()
     make_session = session_factory(create_sqlite_engine(args.database))
     with make_session() as session:
-        payload = _summary(session) if args.summary else _term(session, args.term)
+        if args.summary:
+            payload = _summary(session)
+        elif args.graph:
+            payload = _graph(session, args.graph)
+        else:
+            payload = _term(session, args.term)
     print(json.dumps(payload, sort_keys=True))
     return 0
 
 
 def _summary(session: object) -> dict[str, object]:
+    active_id = active_analysis_run_id(session)
     segment_types = dict(
         session.execute(
             select(EventSegment.segment_type, func.count()).group_by(EventSegment.segment_type)
@@ -64,6 +74,7 @@ def _summary(session: object) -> dict[str, object]:
         ).all()
     )
     return {
+        "active_analysis_run_id": active_id,
         "events": _count(session, Event),
         "segments": {str(key): value for key, value in segment_types.items()},
         "candidate_terms": {str(key): value for key, value in statuses.items()},
@@ -71,7 +82,8 @@ def _summary(session: object) -> dict[str, object]:
         "aliases": _count(session, TopicAlias),
         "event_candidate_terms": _count(session, EventCandidateTerm),
         "event_topics": _count(session, EventTopic),
-        "relations": _count(session, TopicRelation),
+        "topic_relations": _count(session, TopicRelation),
+        "candidate_term_relations": _count(session, CandidateTermRelation),
         "analysis_runs_by_version": run_versions,
         "active_completed_runs": int(
             session.scalar(
@@ -91,6 +103,7 @@ def _summary(session: object) -> dict[str, object]:
             for model in (
                 EventSegment,
                 CandidateTerm,
+                CandidateTermRelation,
                 EventCandidateTerm,
                 Topic,
                 TopicTerm,
@@ -109,17 +122,95 @@ def _summary(session: object) -> dict[str, object]:
             )
             or 0
         ),
+        "orphan_candidate_term_relations": int(
+            session.scalar(
+                text(
+                    "SELECT count(*) FROM candidate_term_relations r "
+                    "LEFT JOIN candidate_terms s ON s.term_id=r.source_term_id "
+                    "LEFT JOIN candidate_terms t ON t.term_id=r.target_term_id "
+                    "WHERE s.term_id IS NULL OR t.term_id IS NULL"
+                )
+            )
+            or 0
+        ),
+        "inactive_run_records": _inactive_run_records(session),
     }
+
+
+def _graph(session: object, layer: str) -> dict[str, object]:
+    run_id = active_analysis_run_id(session)
+    graph = (
+        get_candidate_term_graph(session, node_limit=30, min_relation_weight=0.15)
+        if layer == "terms"
+        else get_topic_graph(session, node_limit=30, min_relation_weight=0.15)
+    )
+    active_candidates = int(
+        session.scalar(
+            select(func.count()).select_from(CandidateTerm).where(
+                CandidateTerm.analysis_run_id == run_id,
+                CandidateTerm.is_active,
+            )
+        )
+        or 0
+    )
+    return {
+        "layer": layer,
+        "active_analysis_run_id": run_id,
+        "nodes": len(graph.nodes),
+        "edges": len(graph.edges),
+        "isolated_nodes": len(graph.nodes)
+        - len(
+            {
+                node_id
+                for edge in graph.edges
+                for node_id in (edge.source_topic_id, edge.target_topic_id)
+            }
+        ),
+        "relation_source": ("candidate_term_relations" if layer == "terms" else "topic_relations"),
+        "filters_active_run": True,
+        "edge_filter_preserves_nodes": layer == "topics" or not active_candidates or bool(graph.nodes),
+    }
+
+
+def _inactive_run_records(session: object) -> int:
+    active_id = active_analysis_run_id(session)
+    if active_id is None:
+        return 0
+    return sum(
+        int(
+            session.scalar(
+                select(func.count()).select_from(model).where(model.analysis_run_id != active_id)
+            )
+            or 0
+        )
+        for model in (
+            EventSegment,
+            CandidateTerm,
+            CandidateTermRelation,
+            EventCandidateTerm,
+            Topic,
+            TopicTerm,
+            EventTopic,
+            TopicRelation,
+        )
+    )
 
 
 def _term(session: object, value: str) -> dict[str, object]:
     normalized = normalize_term(value)
+    active_id = active_analysis_run_id(session)
     candidate = session.scalar(
-        select(CandidateTerm).where(CandidateTerm.normalized_term == normalized)
+        select(CandidateTerm).where(
+            CandidateTerm.normalized_term == normalized,
+            CandidateTerm.analysis_run_id == active_id,
+        )
     )
     topic_count = int(
         session.scalar(
-            select(func.count()).select_from(Topic).where(func.lower(Topic.name) == normalized)
+        select(func.count()).select_from(Topic).where(
+            func.lower(Topic.name) == normalized,
+            Topic.analysis_run_id == active_id,
+        )
         )
         or 0
     )
@@ -127,7 +218,11 @@ def _term(session: object, value: str) -> dict[str, object]:
         session.scalar(
             select(func.count())
             .select_from(TopicAlias)
-            .where(TopicAlias.normalized_alias == normalized)
+            .join(Topic, Topic.topic_id == TopicAlias.topic_id)
+            .where(
+                TopicAlias.normalized_alias == normalized,
+                Topic.analysis_run_id == active_id,
+            )
         )
         or 0
     )
@@ -148,6 +243,7 @@ def _term(session: object, value: str) -> dict[str, object]:
                 select(func.count())
                 .select_from(EventSegment)
                 .where(
+                    EventSegment.analysis_run_id == active_id,
                     EventSegment.segment_type == "prose",
                     func.lower(EventSegment.text).like(event_pattern),
                 )
@@ -164,9 +260,11 @@ def _term(session: object, value: str) -> dict[str, object]:
         "segment_fts_matches": int(
             session.scalar(
                 text(
-                    "SELECT count(*) FROM event_segments_fts WHERE event_segments_fts MATCH :query"
+                    "SELECT count(*) FROM event_segments_fts "
+                    "JOIN event_segments s ON s.rowid=event_segments_fts.rowid "
+                    "WHERE event_segments_fts MATCH :query AND s.analysis_run_id=:run_id"
                 ),
-                {"query": f'"{normalized}"'},
+                {"query": f'"{normalized}"', "run_id": active_id},
             )
             or 0
         ),
