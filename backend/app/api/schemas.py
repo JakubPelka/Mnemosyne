@@ -82,6 +82,26 @@ class TopicSearchResponse(BaseModel):
     items: list[TopicSearchItemResponse]
 
 
+class TopicTermResponse(BaseModel):
+    term_id: str
+    term: str
+    ngram_size: int = Field(ge=1, le=3)
+    language: str | None
+    message_count: int
+    context_count: int
+    document_frequency: int
+    tfidf_score: float
+    quality_score: float
+    quality_status: str
+    rejection_reason: str | None
+    relation_type: str
+
+
+class TopicTermsResponse(BaseModel):
+    topic_id: str
+    items: list[TopicTermResponse]
+
+
 class TopicNeighborResponse(BaseModel):
     topic_id: str
     name: str

@@ -381,4 +381,48 @@ Udostępnić terminy tematu oraz diagnostyczny graf kandydatów w typowanym API.
 ### Commity
 
 - baza bloku: `7b9282c`;
+- rozdzielenie kandydatów i tematów: `b691b21`.
+
+## 2026-07-14 — API tematów i diagnostyka terminów
+
+### Wykonane zadania
+
+- dodano paginowaną listę aktywnych tematów w `GET /api/topics`;
+- dodano skład tematu w `GET /api/topics/{topic_id}/terms`;
+- rozszerzono graf o jawny parametr `view=topics|terms`;
+- zachowano domyślny graf tematów i opcjonalny diagnostyczny wgląd w odrzucone terminy;
+- wykluczono nieaktywne tematy z metadanych, wyszukiwania, szczegółów i grafu;
+- podniesiono wersję kontraktu API do 0.3.0.
+
+### Zmienione pliki
+
+- `backend/app/api/routes.py`, `backend/app/api/schemas.py`;
+- `backend/app/services/catalog.py`, `backend/app/services/graph.py`;
+- `backend/app/main_version.py`, `backend/tests/test_api.py`.
+
+### Testy i wyniki
+
+- `ruff check backend`: zaliczone;
+- testy API: 9 zaliczonych;
+- OpenAPI zawiera jawne modele odpowiedzi nowych endpointów;
+- odrzucone terminy nie są zwracane bez parametru diagnostycznego.
+
+### Decyzje techniczne
+
+- istniejący kształt odpowiedzi grafu jest współdzielony przez oba widoki, aby frontend nie potrzebował drugiego renderera;
+- kategoria węzła diagnostycznego jawnie zawiera status kandydata;
+- szczegóły i wystąpienia pozostają dostępne wyłącznie dla prezentacyjnych tematów.
+
+### Znane ograniczenia i otwarte kwestie
+
+- widok terminów jest narzędziem diagnostycznym i nie ma panelu szczegółów tematu;
+- endpoint listy ma prostą paginację `limit/offset`, bez osobnego licznika całości.
+
+### Następny krok
+
+Dodać mały przełącznik widoku do istniejącego frontendu i ograniczyć domyślny graf do 30 węzłów.
+
+### Commity
+
+- baza bloku: `b691b21`;
 - bieżący blok: oczekuje na commit.

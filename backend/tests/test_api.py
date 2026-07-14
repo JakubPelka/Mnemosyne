@@ -15,7 +15,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from backend.app.api.dependencies import get_session
 from backend.app.database import create_sqlite_engine, session_factory, sqlite_url
 from backend.app.main import app
-from backend.app.models import ChatGPTMessageModel, Event, EventTopic, Topic
+from backend.app.models import (
+    CandidateTerm,
+    ChatGPTMessageModel,
+    Event,
+    EventTopic,
+    Topic,
+    TopicTerm,
+)
 from backend.app.services.import_chatgpt import import_chatgpt_export
 from backend.app.services.topics import build_topics
 
@@ -72,8 +79,10 @@ def test_response_models_are_exposed_in_openapi(api_fixture: ApiFixture) -> None
     for path in (
         "/api/meta",
         "/api/graph",
+        "/api/topics",
         "/api/topics/search",
         "/api/topics/{topic_id}",
+        "/api/topics/{topic_id}/terms",
         "/api/topics/{topic_id}/occurrences",
         "/api/search/events",
         "/api/messages/{event_id}/context",
@@ -89,7 +98,7 @@ def test_meta_returns_only_structural_metadata(api_fixture: ApiFixture) -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["api_version"] == "0.2.0"
+    assert body["api_version"] == "0.3.0"
     assert body["source_types"] == ["chatgpt"]
     assert body["topic_categories"] == ["topic"]
     assert body["counts"]["events"] == 11
@@ -141,6 +150,51 @@ def test_topic_search_and_detail(api_fixture: ApiFixture) -> None:
     assert body["neighbors"]
     assert missing.status_code == 404
     assert missing.json()["detail"] == "topic_not_found"
+
+
+def test_topic_list_terms_and_diagnostic_graph(api_fixture: ApiFixture) -> None:
+    topics = api_fixture.client.get("/api/topics", params={"limit": 2, "offset": 0})
+    terms = api_fixture.client.get(f"/api/topics/{api_fixture.garden_id}/terms")
+    term_graph = api_fixture.client.get(
+        "/api/graph",
+        params={"view": "terms", "min_occurrences": 1, "node_limit": 20},
+    )
+    topic_graph = api_fixture.client.get(
+        "/api/graph",
+        params={"view": "topics", "min_occurrences": 1, "node_limit": 20},
+    )
+
+    assert topics.status_code == 200
+    assert 0 < len(topics.json()["items"]) <= 2
+    assert terms.status_code == 200
+    assert terms.json()["items"]
+    assert all(item["quality_status"] != "rejected" for item in terms.json()["items"])
+    assert all(node["category"].startswith("candidate_") for node in term_graph.json()["nodes"])
+    assert all(node["category"] == "topic" for node in topic_graph.json()["nodes"])
+
+
+def test_rejected_topic_terms_require_diagnostic_opt_in(api_fixture: ApiFixture) -> None:
+    with api_fixture.make_session() as session:
+        rejected = session.scalar(
+            select(CandidateTerm).where(CandidateTerm.quality_status == "rejected").limit(1)
+        )
+        assert rejected is not None
+        session.add(
+            TopicTerm(
+                topic_id=api_fixture.garden_id,
+                term_id=rejected.term_id,
+                relation_type="alias",
+            )
+        )
+        session.commit()
+
+    default = api_fixture.client.get(f"/api/topics/{api_fixture.garden_id}/terms")
+    diagnostic = api_fixture.client.get(
+        f"/api/topics/{api_fixture.garden_id}/terms", params={"include_rejected": True}
+    )
+
+    assert all(item["quality_status"] != "rejected" for item in default.json()["items"])
+    assert any(item["quality_status"] == "rejected" for item in diagnostic.json()["items"])
 
 
 def test_occurrences_are_paginated_filtered_and_excerpted(api_fixture: ApiFixture) -> None:

@@ -21,6 +21,8 @@ from backend.app.api.schemas import (
     TopicNeighborResponse,
     TopicSearchItemResponse,
     TopicSearchResponse,
+    TopicTermResponse,
+    TopicTermsResponse,
 )
 from backend.app.main_version import API_VERSION
 from backend.app.services.catalog import (
@@ -28,11 +30,12 @@ from backend.app.services.catalog import (
     get_catalog_meta,
     get_topic_detail,
     get_topic_occurrences,
+    get_topic_terms,
     search_events,
     search_topics,
 )
 from backend.app.services.context import get_message_context
-from backend.app.services.graph import get_topic_graph
+from backend.app.services.graph import get_candidate_term_graph, get_topic_graph
 from backend.app.services.topics import topic_monthly_intensity
 
 router = APIRouter(prefix="/api")
@@ -71,21 +74,34 @@ def graph(
     node_limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     selected_topic_id: str | None = None,
     neighbors_only: bool = False,
+    view: Literal["topics", "terms"] = "topics",
+    include_rejected: bool = False,
 ) -> GraphResponse:
-    result = get_topic_graph(
-        session,
+    common = dict(
         start=start,
         end=end,
         source_type=source_type,
         privacy_level=privacy_level,
-        categories=frozenset(category) if category else None,
         min_occurrences=min_occurrences,
         min_edge_messages=min_edge_messages,
         min_relation_weight=min_relation_weight,
         node_limit=node_limit,
-        selected_topic_id=selected_topic_id,
         neighbors_only=neighbors_only,
     )
+    if view == "terms":
+        result = get_candidate_term_graph(
+            session,
+            **common,
+            selected_term_id=selected_topic_id,
+            include_rejected=include_rejected,
+        )
+    else:
+        result = get_topic_graph(
+            session,
+            **common,
+            categories=frozenset(category) if category else None,
+            selected_topic_id=selected_topic_id,
+        )
     return GraphResponse(
         nodes=[GraphNodeResponse(**asdict(node)) for node in result.nodes],
         edges=[GraphEdgeResponse(**asdict(edge)) for edge in result.edges],
@@ -104,6 +120,38 @@ def topic_search(
             TopicSearchItemResponse(**asdict(item))
             for item in search_topics(session, q, limit=limit, privacy_level=privacy_level)
         ]
+    )
+
+
+@router.get("/topics", response_model=TopicSearchResponse)
+def topic_list(
+    session: DatabaseSession,
+    limit: Annotated[int, Query(ge=1, le=100)] = 30,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    privacy_level: PrivacyLevel = "private",
+) -> TopicSearchResponse:
+    return TopicSearchResponse(
+        items=[
+            TopicSearchItemResponse(**asdict(item))
+            for item in search_topics(
+                session, "", limit=limit, offset=offset, privacy_level=privacy_level
+            )
+        ]
+    )
+
+
+@router.get("/topics/{topic_id}/terms", response_model=TopicTermsResponse)
+def topic_terms(
+    topic_id: str,
+    session: DatabaseSession,
+    include_rejected: bool = False,
+) -> TopicTermsResponse:
+    terms = get_topic_terms(session, topic_id, include_rejected=include_rejected)
+    if terms is None:
+        raise HTTPException(status_code=404, detail="topic_not_found")
+    return TopicTermsResponse(
+        topic_id=topic_id,
+        items=[TopicTermResponse(**asdict(item)) for item in terms],
     )
 
 

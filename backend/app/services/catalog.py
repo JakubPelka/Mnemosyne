@@ -10,12 +10,14 @@ from sqlalchemy import distinct, func, select, text
 from sqlalchemy.orm import Session
 
 from backend.app.models import (
+    CandidateTerm,
     ChatGPTMessageModel,
     Event,
     EventTopic,
     Source,
     Topic,
     TopicRelation,
+    TopicTerm,
 )
 from backend.app.services.topics import MonthlyIntensity, topic_monthly_intensity
 
@@ -60,6 +62,22 @@ class TopicDetail:
     summary: TopicSummary
     months: tuple[MonthlyIntensity, ...]
     neighbors: tuple[TopicNeighbor, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TopicTermSummary:
+    term_id: str
+    term: str
+    ngram_size: int
+    language: str | None
+    message_count: int
+    context_count: int
+    document_frequency: int
+    tfidf_score: float
+    quality_score: float
+    quality_status: str
+    rejection_reason: str | None
+    relation_type: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,6 +144,7 @@ def search_topics(
     query: str,
     *,
     limit: int = 20,
+    offset: int = 0,
     privacy_level: str = "private",
 ) -> tuple[TopicSummary, ...]:
     pattern = f"%{_escape_like(query.strip())}%"
@@ -150,8 +169,42 @@ def search_topics(
         .group_by(Topic.topic_id, Topic.name, Topic.category)
         .order_by(func.count(distinct(Event.event_id)).desc(), Topic.name)
         .limit(limit)
+        .offset(offset)
     )
     return tuple(TopicSummary(*row) for row in session.execute(statement))
+
+
+def get_topic_terms(
+    session: Session,
+    topic_id: str,
+    *,
+    include_rejected: bool = False,
+) -> tuple[TopicTermSummary, ...] | None:
+    topic = session.get(Topic, topic_id)
+    if topic is None or not topic.is_active:
+        return None
+    statement = (
+        select(
+            CandidateTerm.term_id,
+            CandidateTerm.term,
+            CandidateTerm.ngram_size,
+            CandidateTerm.language,
+            CandidateTerm.message_count,
+            CandidateTerm.context_count,
+            CandidateTerm.document_frequency,
+            CandidateTerm.tfidf_score,
+            CandidateTerm.quality_score,
+            CandidateTerm.quality_status,
+            CandidateTerm.rejection_reason,
+            TopicTerm.relation_type,
+        )
+        .join(TopicTerm, TopicTerm.term_id == CandidateTerm.term_id)
+        .where(TopicTerm.topic_id == topic_id)
+        .order_by(CandidateTerm.quality_score.desc(), CandidateTerm.term)
+    )
+    if not include_rejected:
+        statement = statement.where(CandidateTerm.quality_status != "rejected")
+    return tuple(TopicTermSummary(*row) for row in session.execute(statement))
 
 
 def get_topic_detail(
