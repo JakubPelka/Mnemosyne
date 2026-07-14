@@ -727,4 +727,52 @@ Uruchomić konserwatywną przebudowę właściwej lokalnej bazy, sprawdzić API 
 ### Commity
 
 - baza bloku: `24ac70e`;
-- wersjonowanie i przebudowa: oczekuje na commit.
+- wersjonowanie i przebudowa: `6335ece`.
+
+## 2026-07-14 — Konserwatywna walidacja lokalnej warstwy tematów
+
+### Wykonane zadania
+
+- wykonano dwie identyczne świeże przebudowy właściwej lokalnej bazy bez overrides;
+- potwierdzono 0 automatycznych tematów zamiast sztucznego osiągania limitu 200;
+- utworzono ignorowany lokalny override dla dwóch pojęć jawnie wskazanych przez właściciela;
+- po przebudowie uzyskano dokładnie 2 zatwierdzone tematy, 5 aliasów i 1 relację;
+- zoptymalizowano odwrotne indeksy przypisań, szczegóły terminu i domyślny graf terminów;
+- odizolowano syntetyczne testy od prywatnego lokalnego pliku overrides.
+
+### Zmienione pliki
+
+- `backend/app/models/core.py`, `services/catalog.py`, `services/graph.py`, `services/topics.py`;
+- migracja indeksów przypisań;
+- `backend/tests/conftest.py`;
+- lokalny, ignorowany `data/local_topic_overrides.yaml`.
+
+### Testy i wyniki
+
+- backend: 44 testy zaliczone, Ruff i Alembic zaliczone;
+- druga przebudowa bez overrides: identyczne 6540 kandydatów, 115470 segmentów, 0 tematów i 0 relacji;
+- przebudowa z lokalnym override: 2 tematy, 5 aliasów, 1 relacja, dokładnie jeden aktywny przebieg;
+- relacja lokalna ma 36 niezależnych kontekstów;
+- API 0.4.0: szczegóły terminu 5,67 s, graf 30 terminów 2,53 s, graf wybranego terminu 2,51 s, pusty graf tematów 0,03 s;
+- wyszukiwanie obowiązkowego akronimu zwraca `exact_topic` po lokalnym override.
+
+### Decyzje techniczne
+
+- testy zawsze wskazują nieistniejący plik lokalnych overrides, chyba że jawnie testują syntetyczną konfigurację;
+- automatyczne frazy i akronimy dużego korpusu nie są promowane bez dodatkowej warstwy semantycznej;
+- domyślny graf terminów korzysta z zapisanych liczników, a dopiero filtrowane widoki wykonują agregację po wydarzeniach.
+
+### Znane ograniczenia i otwarte kwestie
+
+- stary proces backendu na porcie 8000 nadal używa obrazu API 0.3.0 i wymaga późniejszego restartu/rebuild Compose przez właściciela;
+- frontend nie został zmieniony w tym bloku, lecz bieżące środowisko nadal nie ma Node na hoście;
+- ręczna ocena jakości jedynej relacji w UI pozostaje kryterium użytkownika przed ewentualnym merge.
+
+### Następny krok
+
+Uruchomić odświeżony stos, ocenić dwuwęzłowy graf tematów beta i ewentualnie dostroić wyłącznie lokalne aliasy; nie rozszerzać automatycznej promocji bez mierzalnego modelu jakości.
+
+### Commity
+
+- wersjonowanie analizy: `6335ece`;
+- wydajność i walidacja lokalna: oczekuje na commit.

@@ -636,15 +636,19 @@ def _topic_neighbors(
     privacy_level: str,
     limit: int,
 ) -> tuple[TopicNeighbor, ...]:
-    target_events = (
-        select(EventTopic.event_id)
-        .join(Event)
-        .where(
-            EventTopic.topic_id == topic_id,
-            Event.is_active.is_(True),
-            Event.privacy_level == privacy_level,
+    target_events = tuple(
+        session.scalars(
+            select(EventTopic.event_id)
+            .join(Event)
+            .where(
+                EventTopic.topic_id == topic_id,
+                Event.is_active.is_(True),
+                Event.privacy_level == privacy_level,
+            )
         )
     )
+    if not target_events:
+        return ()
     rows = session.execute(
         select(
             Topic.topic_id,
@@ -709,21 +713,25 @@ def _term_neighbors(
     privacy_level: str,
     limit: int,
 ) -> tuple[TopicNeighbor, ...]:
-    target_events = (
-        select(EventCandidateTerm.event_id)
-        .join(Event, Event.event_id == EventCandidateTerm.event_id)
-        .where(
-            EventCandidateTerm.term_id == term_id,
-            Event.is_active.is_(True),
-            Event.privacy_level == privacy_level,
+    target_events = tuple(
+        session.scalars(
+            select(EventCandidateTerm.event_id)
+            .join(Event, Event.event_id == EventCandidateTerm.event_id)
+            .where(
+                EventCandidateTerm.term_id == term_id,
+                Event.is_active.is_(True),
+                Event.privacy_level == privacy_level,
+            )
         )
     )
+    if not target_events:
+        return ()
     rows = session.execute(
         select(
             CandidateTerm.term_id,
             CandidateTerm.term,
-            Event.event_id,
-            func.coalesce(Event.context_id, Event.event_id),
+            func.count(distinct(Event.event_id)),
+            func.count(distinct(func.coalesce(Event.context_id, Event.event_id))),
         )
         .join(EventCandidateTerm, EventCandidateTerm.term_id == CandidateTerm.term_id)
         .join(Event, Event.event_id == EventCandidateTerm.event_id)
@@ -735,43 +743,22 @@ def _term_neighbors(
             Event.is_active.is_(True),
             Event.privacy_level == privacy_level,
         )
+        .group_by(CandidateTerm.term_id, CandidateTerm.term)
+        .order_by(func.count(distinct(Event.event_id)).desc(), CandidateTerm.term)
+        .limit(limit)
     )
-    names: dict[str, str] = {}
-    messages: Counter[str] = Counter()
-    contexts: dict[str, set[str]] = defaultdict(set)
-    for neighbor_id, name, event_id, context_id in rows:
-        names[neighbor_id] = name
-        messages[neighbor_id] += 1
-        contexts[neighbor_id].add(context_id)
-    totals = dict(
-        session.execute(
-            select(
-                EventCandidateTerm.term_id,
-                func.count(distinct(EventCandidateTerm.event_id)),
-            )
-            .join(Event, Event.event_id == EventCandidateTerm.event_id)
-            .where(
-                EventCandidateTerm.term_id.in_(messages),
-                Event.is_active.is_(True),
-                Event.privacy_level == privacy_level,
-            )
-            .group_by(EventCandidateTerm.term_id)
-        ).all()
-    )
-    result = []
-    for neighbor_id, message_count in messages.items():
-        denominator = math.sqrt(target_count * totals.get(neighbor_id, 0))
-        result.append(
-            TopicNeighbor(
-                topic_id=neighbor_id,
-                name=names[neighbor_id],
-                category="term",
-                message_count=message_count,
-                context_count=len(contexts[neighbor_id]),
-                weight=message_count / denominator if denominator else 0.0,
-            )
+    result = [
+        TopicNeighbor(
+            topic_id=neighbor_id,
+            name=name,
+            category="term",
+            message_count=message_count,
+            context_count=context_count,
+            weight=message_count / target_count if target_count else 0.0,
         )
-    return tuple(sorted(result, key=lambda item: (-item.weight, item.name))[:limit])
+        for neighbor_id, name, message_count, context_count in rows
+    ]
+    return tuple(result)
 
 
 def _escape_like(value: str) -> str:

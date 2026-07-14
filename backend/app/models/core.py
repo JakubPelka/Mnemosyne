@@ -193,7 +193,7 @@ class TopicTerm(Base):
     )
     analysis_run_id: Mapped[str | None] = mapped_column(String(128), index=True)
     term_id: Mapped[str] = mapped_column(
-        ForeignKey("candidate_terms.term_id", ondelete="CASCADE"), primary_key=True
+        ForeignKey("candidate_terms.term_id", ondelete="CASCADE"), primary_key=True, index=True
     )
     relation_type: Mapped[str] = mapped_column(String(32), nullable=False, default="alias")
 
@@ -206,7 +206,7 @@ class EventCandidateTerm(Base):
     )
     analysis_run_id: Mapped[str | None] = mapped_column(String(128), index=True)
     term_id: Mapped[str] = mapped_column(
-        ForeignKey("candidate_terms.term_id", ondelete="CASCADE"), primary_key=True
+        ForeignKey("candidate_terms.term_id", ondelete="CASCADE"), primary_key=True, index=True
     )
     weight: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
 
@@ -219,7 +219,7 @@ class EventTopic(Base):
     )
     analysis_run_id: Mapped[str | None] = mapped_column(String(128), index=True)
     topic_id: Mapped[str] = mapped_column(
-        ForeignKey("topics.topic_id", ondelete="CASCADE"), primary_key=True
+        ForeignKey("topics.topic_id", ondelete="CASCADE"), primary_key=True, index=True
     )
     weight: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
 

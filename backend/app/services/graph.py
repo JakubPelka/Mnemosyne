@@ -10,7 +10,7 @@ from sqlalchemy import distinct, func, select
 from sqlalchemy.orm import Session
 
 from backend.app.models import CandidateTerm, Event, EventCandidateTerm, EventTopic, Source, Topic
-from backend.app.services.analysis_runs import active_analysis_run_subquery
+from backend.app.services.analysis_runs import active_analysis_run_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +59,9 @@ def get_topic_graph(
     if not 0.0 <= min_relation_weight <= 1.0:
         raise ValueError("graph_relation_weight_out_of_range")
 
+    analysis_run_id = active_analysis_run_id(session)
+    if analysis_run_id is None:
+        return TopicGraph(nodes=(), edges=())
     statement = (
         select(
             Event.event_id,
@@ -75,7 +78,7 @@ def get_topic_graph(
             Event.is_active.is_(True),
             Event.privacy_level == privacy_level,
             Topic.is_active.is_(True),
-            Topic.analysis_run_id == active_analysis_run_subquery(),
+            Topic.analysis_run_id == analysis_run_id,
         )
     )
     if start is not None:
@@ -187,10 +190,13 @@ def get_candidate_term_graph(
     neighbors_only: bool = False,
     include_rejected: bool = False,
 ) -> TopicGraph:
+    analysis_run_id = active_analysis_run_id(session)
+    if analysis_run_id is None:
+        return TopicGraph(nodes=(), edges=())
     filters = [Event.is_active.is_(True), Event.privacy_level == privacy_level]
     if not include_rejected:
         filters.append(CandidateTerm.is_active.is_(True))
-    filters.append(CandidateTerm.analysis_run_id == active_analysis_run_subquery())
+    filters.append(CandidateTerm.analysis_run_id == analysis_run_id)
     if start is not None:
         filters.append(Event.timestamp_start >= start)
     if end is not None:
@@ -198,30 +204,49 @@ def get_candidate_term_graph(
     if source_type is not None:
         filters.append(Source.source_type == source_type)
 
-    ranked = session.execute(
-        select(
-            CandidateTerm.term_id,
-            func.count(distinct(Event.event_id)).label("event_count"),
-        )
-        .join(EventCandidateTerm, EventCandidateTerm.term_id == CandidateTerm.term_id)
-        .join(Event, Event.event_id == EventCandidateTerm.event_id)
-        .join(Source, Source.source_id == Event.source_id)
-        .where(*filters)
-        .group_by(CandidateTerm.term_id)
-        .having(func.count(distinct(Event.event_id)) >= min_occurrences)
-        .order_by(func.count(distinct(Event.event_id)).desc(), CandidateTerm.term_id)
-        .limit(node_limit)
-    ).all()
-    visible_ids = [term_id for term_id, _count in ranked]
-    if selected_term_id and selected_term_id not in visible_ids:
-        selected_count = session.scalar(
-            select(func.count(distinct(Event.event_id)))
-            .select_from(CandidateTerm)
+    if start is None and end is None and source_type is None and privacy_level == "private":
+        candidate_filters = [CandidateTerm.analysis_run_id == analysis_run_id]
+        if not include_rejected:
+            candidate_filters.append(CandidateTerm.is_active.is_(True))
+        ranked = session.execute(
+            select(CandidateTerm.term_id, CandidateTerm.message_count)
+            .where(*candidate_filters, CandidateTerm.message_count >= min_occurrences)
+            .order_by(CandidateTerm.message_count.desc(), CandidateTerm.term_id)
+            .limit(node_limit)
+        ).all()
+    else:
+        ranked = session.execute(
+            select(
+                CandidateTerm.term_id,
+                func.count(distinct(Event.event_id)).label("event_count"),
+            )
             .join(EventCandidateTerm, EventCandidateTerm.term_id == CandidateTerm.term_id)
             .join(Event, Event.event_id == EventCandidateTerm.event_id)
             .join(Source, Source.source_id == Event.source_id)
-            .where(*filters, CandidateTerm.term_id == selected_term_id)
-        )
+            .where(*filters)
+            .group_by(CandidateTerm.term_id)
+            .having(func.count(distinct(Event.event_id)) >= min_occurrences)
+            .order_by(func.count(distinct(Event.event_id)).desc(), CandidateTerm.term_id)
+            .limit(node_limit)
+        ).all()
+    visible_ids = [term_id for term_id, _count in ranked]
+    if selected_term_id and selected_term_id not in visible_ids:
+        if start is None and end is None and source_type is None and privacy_level == "private":
+            selected_count = session.scalar(
+                select(CandidateTerm.message_count).where(
+                    CandidateTerm.term_id == selected_term_id,
+                    CandidateTerm.analysis_run_id == analysis_run_id,
+                )
+            )
+        else:
+            selected_count = session.scalar(
+                select(func.count(distinct(Event.event_id)))
+                .select_from(CandidateTerm)
+                .join(EventCandidateTerm, EventCandidateTerm.term_id == CandidateTerm.term_id)
+                .join(Event, Event.event_id == EventCandidateTerm.event_id)
+                .join(Source, Source.source_id == Event.source_id)
+                .where(*filters, CandidateTerm.term_id == selected_term_id)
+            )
         if selected_count and selected_count >= min_occurrences:
             visible_ids = [*visible_ids[:-1], selected_term_id]
     if not visible_ids:
@@ -236,11 +261,13 @@ def get_candidate_term_graph(
             CandidateTerm.term,
             CandidateTerm.quality_status,
         )
-        .join(EventCandidateTerm, EventCandidateTerm.event_id == Event.event_id)
+        .select_from(EventCandidateTerm)
+        .join(Event, Event.event_id == EventCandidateTerm.event_id)
         .join(CandidateTerm, CandidateTerm.term_id == EventCandidateTerm.term_id)
-        .join(Source, Source.source_id == Event.source_id)
         .where(*filters, CandidateTerm.term_id.in_(visible_ids))
     )
+    if source_type is not None:
+        statement = statement.join(Source, Source.source_id == Event.source_id)
     rows = (
         (event_id, context_id, timestamp, term_id, term, f"candidate_{status}")
         for event_id, context_id, timestamp, term_id, term, status in session.execute(statement)

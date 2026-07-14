@@ -543,9 +543,7 @@ def _build_topic_definitions(
         if not qualifies:
             continue
         creation_method = (
-            "alias_group"
-            if promotes_acronym or len(terms) >= 2
-            else "high_confidence_phrase"
+            "alias_group" if promotes_acronym or len(terms) >= 2 else "high_confidence_phrase"
         )
         definitions.append(
             _TopicDefinition(
