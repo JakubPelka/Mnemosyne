@@ -297,4 +297,38 @@ Po użytkowej ocenie atlasu dostroić stopwords i progi tematów na podstawie ob
 ### Commity
 
 - baza sprintu: `16f6e86`;
+- baseline jakości: `71db4b2`.
+
+## 2026-07-14 — Lokalne filtry jakości kandydatów
+
+### Wykonane zadania
+
+- wydzielono wersjonowane leksykony stopwords dla polskiego, szwedzkiego i angielskiego;
+- dodano listę artefaktów eksportu, cytowań i narzędzi wraz z wykrywaniem wariantów;
+- zaimplementowano deterministyczny scoring i jawne powody odrzucenia;
+- dodano reguły dla długości, częstości, niskiej informacji, identyfikatorów i tokenów technicznych;
+- dodano wyjaśnialne preferowanie frazy nad pokrytym unigramem.
+
+### Zmienione pliki
+
+- `backend/app/nlp/lexicons.py`;
+- `backend/app/nlp/quality.py`;
+- `backend/tests/test_topic_quality.py`;
+- `docs/progress.md`.
+
+### Testy i wyniki
+
+- `ruff check backend/app/nlp backend/tests/test_topic_quality.py`: zaliczone;
+- `pytest -q backend/tests/test_topic_quality.py`: 6 testów zaliczonych.
+
+### Decyzje, ograniczenia i następny krok
+
+- klasyfikacja jest lokalna, deterministyczna i zapisuje pojedynczy główny powód odrzucenia;
+- język jest wykrywany konserwatywnie na podstawie markerów leksykalnych, bez modelu zewnętrznego;
+- reguła preferowania frazy wymaga zarówno przewagi wyniku, jak i co najmniej 50% pokrycia unigramu;
+- następny krok: zapisać kandydatów i ich przypisania osobno od tematów.
+
+### Commity
+
+- baza bloku: `71db4b2`;
 - bieżący blok: oczekuje na commit.
