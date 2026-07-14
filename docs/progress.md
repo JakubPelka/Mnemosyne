@@ -827,3 +827,49 @@ Uruchomić odświeżony stos w środowisku właściciela, ręcznie ocenić graf 
 - backend i dane grafu: `da7ddc1`;
 - interfejs zbiorczej eksploracji: `285122b`.
 - jawne źródło relacji tematów: `a233169`.
+
+## 2026-07-14 — Finalna korekta podgrafu wyniku zbiorczego
+
+### Wykonane zadania
+
+- dodano nietrwały podgraf wyniku zbiorczego z wyróżnionym węzłem zapytania, dopasowanymi pojęciami i sąsiadami;
+- ograniczono widoczne warianty terminów do pięciu i pozostawiono sam węzeł zapytania dla wyniku bez sąsiadów;
+- zaostrzono filtr sąsiadów o URL, protokoły, samodzielne domeny, stopwords, tokeny techniczne, krótkie tokeny i warianty zapytania;
+- zachowano zatwierdzone krótkie akronimy przez istniejące przypisanie terminu do tematu;
+- potwierdzono, że wirtualny węzeł nie powoduje żadnego zapisu w SQLite;
+- zmiana zapytania usuwa poprzedni podgraf z pamięci interfejsu.
+
+### Zmienione pliki
+
+- `backend/app/services/catalog.py`;
+- `backend/tests/test_api.py`;
+- `frontend/src/App.tsx`, `frontend/src/graph.ts`;
+- `frontend/tests/app.test.tsx`, `frontend/tests/graph.test.ts`;
+- `docs/progress.md`.
+
+### Testy i wyniki
+
+- backend: 48 testów zaliczonych; Ruff i formatowanie zaliczone;
+- frontend: 18 testów zaliczonych; TypeScript i produkcyjny build Vite zaliczone;
+- Alembic: brak zmian schematu i brak nowej migracji;
+- lokalny test kontraktowy: resolver `GIS` HTTP 200, wyszukiwanie terminów aktywne, globalny graf terminów zwraca 30 węzłów;
+- lokalna eksploracja zbiorcza: 12 sąsiadów, 0 wykrytych niedozwolonych etykiet i 0 duplikatów fragmentów.
+
+### Decyzje techniczne
+
+- podgraf agregatu jest czystą transformacją odpowiedzi API w `GraphResponse` i istnieje wyłącznie w stanie React;
+- węzeł zapytania używa deterministycznego identyfikatora znormalizowanego zapytania, lecz nigdy nie jest przekazywany do endpointu szczegółów;
+- filtr jakości wykorzystuje istniejące statusy kandydatów, rejection reason, leksykony i ręczne przypisania zamiast nowej warstwy danych.
+
+### Znane ograniczenia i otwarte kwestie
+
+- podgraf jest gwiazdą wokół zapytania; nie próbuje wyznaczać nowych relacji semantycznych między sąsiadami;
+- ręczna ocena wizualna właściciela pozostaje warunkiem zamrożenia i ewentualnego merge brancha.
+
+### Następny krok
+
+Opublikować korektę na istniejącej gałęzi bez scalania, a następnie wykonać ręczną ocenę podgrafu zbiorczego.
+
+### Commity
+
+- podgraf i filtr sąsiadów: `a6cd988`.
