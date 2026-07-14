@@ -1,8 +1,10 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 
+import { FilterPanel } from "../src/components/FilterPanel";
 import { StatusPanel } from "../src/components/StatusPanel";
 import { TopicDetails } from "../src/components/TopicDetails";
 import { TopicSearchResults } from "../src/components/TopicSearchResults";
+import { DEFAULT_FILTERS } from "../src/filters";
 import { detail, occurrences, topic } from "./fixtures";
 
 test("selects a topic from search results", () => {
@@ -32,4 +34,20 @@ test("loads limited context after choosing an excerpt", () => {
   );
   expect(screen.getByLabelText(/ograniczony kontekst/i)).toHaveTextContent("Synthetic target");
   expect(screen.getByText("Synthetic target").closest("article")).toHaveClass("target");
+});
+
+test("switches to the diagnostic raw-term view", () => {
+  const onChange = vi.fn();
+  render(
+    <FilterPanel
+      filters={DEFAULT_FILTERS}
+      meta={null}
+      selectedTopicId={null}
+      onChange={onChange}
+      onApply={vi.fn()}
+      onReset={vi.fn()}
+    />,
+  );
+  fireEvent.change(screen.getByLabelText("Widok grafu"), { target: { value: "terms" } });
+  expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ graphView: "terms" }));
 });

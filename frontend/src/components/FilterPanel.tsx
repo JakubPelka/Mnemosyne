@@ -26,6 +26,23 @@ export function FilterPanel({
   return (
     <form className="filter-form" onSubmit={submit}>
       <label>
+        Widok
+        <select
+          aria-label="Widok grafu"
+          value={filters.graphView}
+          onChange={(event) =>
+            onChange({
+              ...filters,
+              graphView: event.target.value as GraphFilters["graphView"],
+              category: "",
+            })
+          }
+        >
+          <option value="topics">Tematy</option>
+          <option value="terms">Surowe terminy (diagnostyczne)</option>
+        </select>
+      </label>
+      <label>
         Źródło
         <select value={filters.sourceType} onChange={(event) => onChange({ ...filters, sourceType: event.target.value })}>
           <option value="">Wszystkie lokalne</option>
@@ -34,7 +51,7 @@ export function FilterPanel({
       </label>
       <label>
         Kategoria
-        <select value={filters.category} onChange={(event) => onChange({ ...filters, category: event.target.value })}>
+        <select disabled={filters.graphView === "terms"} value={filters.category} onChange={(event) => onChange({ ...filters, category: event.target.value })}>
           <option value="">Wszystkie</option>
           {meta?.topic_categories.map((category) => <option value={category} key={category}>{category}</option>)}
         </select>
@@ -50,7 +67,7 @@ export function FilterPanel({
       <label>
         Limit węzłów
         <select value={filters.nodeLimit} onChange={(event) => onChange({ ...filters, nodeLimit: Number(event.target.value) })}>
-          {[50, 100, 200, 400, 750].map((limit) => <option value={limit} key={limit}>{limit}</option>)}
+          {[20, 30, 50, 100, 200, 400].map((limit) => <option value={limit} key={limit}>{limit}</option>)}
         </select>
       </label>
       <label className="toggle">

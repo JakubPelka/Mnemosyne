@@ -425,4 +425,45 @@ Dodać mały przełącznik widoku do istniejącego frontendu i ograniczyć domy�
 ### Commity
 
 - baza bloku: `b691b21`;
+- API tematów i diagnostyki: `ce10529`.
+
+## 2026-07-14 — Domyślny graf tematów w UI
+
+### Wykonane zadania
+
+- dodano mały przełącznik „Tematy / Surowe terminy (diagnostyczne)”;
+- ustawiono 30 węzłów jako domyślny limit grafu;
+- zachowano wyszukiwanie, szczegóły, fragmenty i kontekst wyłącznie dla właściwych tematów;
+- dodano czytelny stan prawego panelu dla widoku diagnostycznego;
+- wyszukanie tematu automatycznie przywraca widok prezentacyjny.
+
+### Zmienione pliki
+
+- `frontend/src/types.ts`, `frontend/src/filters.ts`, `frontend/src/App.tsx`;
+- `frontend/src/components/FilterPanel.tsx`;
+- `frontend/tests/filters.test.ts`, `frontend/tests/api.test.ts`, `frontend/tests/components.test.tsx`.
+
+### Testy i wyniki
+
+- `npm test`: 11 testów zaliczonych;
+- `npm run build`: TypeScript i produkcyjny bundle zbudowane poprawnie.
+
+### Decyzje techniczne
+
+- oba widoki korzystają z istniejącego komponentu Sigma i tego samego kontraktu grafu;
+- filtr kategorii jest wyłączony dla surowych terminów, ponieważ kategorie należą do warstwy tematów;
+- kliknięcie surowego terminu może go zaznaczyć na grafie, ale nie wywołuje endpointów szczegółów tematu.
+
+### Znane ograniczenia i otwarte kwestie
+
+- widok diagnostyczny celowo nie ma osobnego panelu metryk kandydata;
+- walidacja została uruchomiona w lokalnym kontenerze Node, ponieważ host nie ma binariów Node.js.
+
+### Następny krok
+
+Przeprowadzić pełną walidację, migrację kopii i rzeczywistej lokalnej bazy, porównanie jakości oraz kontrolę Compose i Git.
+
+### Commity
+
+- baza bloku: `ce10529`;
 - bieżący blok: oczekuje na commit.

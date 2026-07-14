@@ -70,7 +70,7 @@ export default function App() {
   }, [filters, selectedTopicId]);
 
   useEffect(() => {
-    if (!selectedTopicId) {
+    if (!selectedTopicId || filters.graphView === "terms") {
       setDetail(null);
       setOccurrences(null);
       setContext(null);
@@ -120,12 +120,27 @@ export default function App() {
   }, [search]);
 
   const selectTopic = useCallback((topicId: string) => {
+    setDraftFilters((value) => ({ ...value, graphView: "topics" }));
+    setFilters((value) => ({ ...value, graphView: "topics" }));
     setSelectedTopicId(topicId);
     setOccurrenceOffset(0);
     setContext(null);
     setSearch("");
     setSearchResults([]);
   }, []);
+
+  const selectGraphNode = useCallback(
+    (nodeId: string) => {
+      setSelectedTopicId(nodeId);
+      setOccurrenceOffset(0);
+      setContext(null);
+      if (filters.graphView === "topics") {
+        setSearch("");
+        setSearchResults([]);
+      }
+    },
+    [filters.graphView],
+  );
 
   const loadContext = useCallback((eventId: string) => {
     setDetailError(null);
@@ -179,15 +194,17 @@ export default function App() {
         <section className="graph-panel" aria-label="Graf tematów">
           <div className="graph-caption">
             <span>{graph?.nodes.length ?? 0} węzłów · {graph?.edges.length ?? 0} relacji</span>
-            <span>rozmiar = intensywność okresu</span>
+            <span>{filters.graphView === "topics" ? "tematy" : "terminy diagnostyczne"} · rozmiar = intensywność okresu</span>
           </div>
           <StatusPanel loading={loading} error={error} empty={!loading && !error && graph?.nodes.length === 0} />
-          {graph && graph.nodes.length > 0 && <GraphCanvas data={graph} selectedTopicId={selectedTopicId} onSelect={selectTopic} />}
+          {graph && graph.nodes.length > 0 && <GraphCanvas data={graph} selectedTopicId={selectedTopicId} onSelect={selectGraphNode} />}
         </section>
 
         <aside className="right-panel">
           <div className="panel-heading"><span>02</span><h1>Szczegóły</h1></div>
-          <TopicDetails
+          {filters.graphView === "terms" ? (
+            <p className="empty-panel">Widok diagnostyczny pokazuje surowe kandydaty. Szczegóły i fragmenty są dostępne w widoku tematów.</p>
+          ) : <TopicDetails
             detail={detail}
             occurrences={occurrences}
             context={context}
@@ -196,7 +213,7 @@ export default function App() {
             onSelectNeighbor={selectTopic}
             onLoadContext={loadContext}
             onPage={setOccurrenceOffset}
-          />
+          />}
         </aside>
       </div>
 

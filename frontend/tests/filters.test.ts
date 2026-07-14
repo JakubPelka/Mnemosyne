@@ -3,7 +3,14 @@ import { DEFAULT_FILTERS, graphQuery, occurrenceQuery } from "../src/filters";
 test("graph filters omit neighbors without a selected topic", () => {
   const query = graphQuery({ ...DEFAULT_FILTERS, neighborsOnly: true, category: "keyword" }, null);
   expect(query).toContain("category=keyword");
+  expect(query).toContain("view=topics");
   expect(query).not.toContain("neighbors_only");
+});
+
+test("diagnostic graph view is explicit and defaults to 30 nodes", () => {
+  const query = graphQuery({ ...DEFAULT_FILTERS, graphView: "terms" }, null);
+  expect(query).toContain("view=terms");
+  expect(query).toContain("node_limit=30");
 });
 
 test("occurrence filters preserve paging", () => {

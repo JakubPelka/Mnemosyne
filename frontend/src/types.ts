@@ -85,6 +85,7 @@ export interface MessageContext {
 }
 
 export interface GraphFilters {
+  graphView: "topics" | "terms";
   startMonth: string;
   endMonth: string;
   sourceType: string;
