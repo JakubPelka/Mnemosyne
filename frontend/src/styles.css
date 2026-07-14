@@ -44,6 +44,9 @@ button.primary { background: var(--accent); color: #06100e; border-color: var(--
 .search-results { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 4px; }
 .search-results button { width: 100%; display: flex; justify-content: space-between; text-align: left; }
 .search-results small { color: var(--muted); }
+.explore-result { width: 100%; margin: 10px 0 4px; padding: 10px; border-color: var(--accent); color: inherit; text-align: left; }
+.explore-result span, .explore-result small { display: block; }
+.explore-result small { color: var(--muted); margin-top: 3px; }
 .dataset-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--line); }
 .dataset-summary span { font: 500 .9rem ui-monospace, monospace; }
 .dataset-summary small { display: block; color: var(--muted); font: .58rem ui-sans-serif, sans-serif; }

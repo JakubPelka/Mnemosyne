@@ -8,8 +8,10 @@ import { GraphCanvas } from "./components/GraphCanvas";
 import { StatusPanel } from "./components/StatusPanel";
 import { TopicDetails } from "./components/TopicDetails";
 import { TopicSearchResults } from "./components/TopicSearchResults";
+import { SearchExploreDetails } from "./components/SearchExploreDetails";
 import type {
   EventExcerptPage,
+  ExploreResult,
   GraphFilters,
   GraphResponse,
   MessageContext,
@@ -26,6 +28,8 @@ export default function App() {
   const [filters, setFilters] = useState<GraphFilters>(DEFAULT_FILTERS);
   const [graph, setGraph] = useState<GraphResponse | null>(null);
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
+  const [selectionType, setSelectionType] = useState<"aggregate" | "term" | "topic" | null>(null);
+  const [aggregate, setAggregate] = useState<ExploreResult | null>(null);
   const [detail, setDetail] = useState<TopicDetail | null>(null);
   const [occurrences, setOccurrences] = useState<EventExcerptPage | null>(null);
   const [context, setContext] = useState<MessageContext | null>(null);
@@ -146,6 +150,8 @@ export default function App() {
     setDraftFilters((value) => ({ ...value, graphView: layer }));
     setFilters((value) => ({ ...value, graphView: layer }));
     setSelectedTopicId(topicId);
+    setSelectionType(layer === "terms" ? "term" : "topic");
+    setAggregate(null);
     setOccurrenceOffset(0);
     setContext(null);
     setSearch("");
@@ -155,6 +161,8 @@ export default function App() {
   const selectGraphNode = useCallback(
     (nodeId: string) => {
       setSelectedTopicId(nodeId);
+      setSelectionType(filters.graphView === "terms" ? "term" : "topic");
+      setAggregate(null);
       setOccurrenceOffset(0);
       setContext(null);
       if (filters.graphView === "topics") {
@@ -172,6 +180,37 @@ export default function App() {
       .catch((reason: Error) => setDetailError(reason.message));
   }, []);
 
+  const clearSelection = useCallback(() => {
+    setSelectedTopicId(null);
+    setSelectionType(null);
+    setAggregate(null);
+    setDetail(null);
+    setOccurrences(null);
+    setContext(null);
+    setOccurrenceOffset(0);
+  }, []);
+
+  const runExplore = useCallback((query: string, offset = 0) => {
+    if (!query.trim()) return;
+    setSelectedTopicId(null);
+    setSelectionType("aggregate");
+    setDetail(null);
+    setOccurrences(null);
+    setContext(null);
+    setOccurrenceOffset(offset);
+    setDetailLoading(true);
+    setDetailError(null);
+    api.explore(query.trim(), filters, OCCURRENCE_LIMIT, offset)
+      .then(setAggregate)
+      .catch((reason: Error) => setDetailError(reason.message))
+      .finally(() => setDetailLoading(false));
+  }, [filters]);
+
+  const changeDraftFilters = useCallback((next: GraphFilters) => {
+    if (next.graphView !== draftFilters.graphView) clearSelection();
+    setDraftFilters(next);
+  }, [clearSelection, draftFilters.graphView]);
+
   const reset = () => {
     const initial = {
       ...DEFAULT_FILTERS,
@@ -182,6 +221,8 @@ export default function App() {
     setDraftFilters(initial);
     setFilters(initial);
     setSelectedTopicId(null);
+    setSelectionType(null);
+    setAggregate(null);
     setOccurrenceOffset(0);
   };
 
@@ -196,9 +237,9 @@ export default function App() {
           <div className="panel-heading"><span>01</span><h1>Eksploruj</h1></div>
           <label className="search-box">
             <span>Wyszukaj termin lub temat</span>
-            <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="np. projekt" />
+            <input value={search} onChange={(event) => { setSearch(event.target.value); clearSelection(); }} onKeyDown={(event) => { if (event.key === "Enter") runExplore(search); }} placeholder="np. projekt" />
           </label>
-          <TopicSearchResults query={search} results={searchResults} onSelect={selectResult} />
+          <TopicSearchResults query={search} results={searchResults} onExplore={runExplore} onSelect={selectResult} />
           <label className="search-box">
             <span>Wyszukaj treść</span>
             <input value={contentSearch} onChange={(event) => setContentSearch(event.target.value)} placeholder="proza, kod lub log" />
@@ -218,14 +259,14 @@ export default function App() {
             filters={draftFilters}
             meta={meta}
             selectedTopicId={selectedTopicId}
-            onChange={setDraftFilters}
+            onChange={changeDraftFilters}
             onApply={() => { setFilters(draftFilters); setOccurrenceOffset(0); }}
             onReset={reset}
           />
           <div className="dataset-summary">
             <span>{meta?.counts.events.toLocaleString("pl-PL") ?? "—"}<small>zdarzeń</small></span>
-            <span>{meta?.counts.topics.toLocaleString("pl-PL") ?? "—"}<small>tematów</small></span>
-            <span>{meta?.counts.relations.toLocaleString("pl-PL") ?? "—"}<small>relacji</small></span>
+            <span>{(filters.graphView === "terms" ? meta?.counts.candidate_terms : meta?.counts.topics)?.toLocaleString("pl-PL") ?? "—"}<small>{filters.graphView === "terms" ? "terminów" : "tematów"}</small></span>
+            <span>{(filters.graphView === "terms" ? meta?.counts.candidate_term_relations : meta?.counts.topic_relations)?.toLocaleString("pl-PL") ?? "—"}<small>relacji</small></span>
           </div>
         </aside>
 
@@ -240,7 +281,15 @@ export default function App() {
 
         <aside className="right-panel">
           <div className="panel-heading"><span>02</span><h1>Szczegóły</h1></div>
-          <TopicDetails
+          {selectionType === "aggregate" && aggregate ? <SearchExploreDetails
+            result={aggregate}
+            context={context}
+            loading={detailLoading}
+            error={detailError}
+            onSelect={selectResult}
+            onLoadContext={loadContext}
+            onPage={(offset) => runExplore(aggregate.query, offset)}
+          /> : <TopicDetails
             detail={detail}
             occurrences={occurrences}
             context={context}
@@ -249,7 +298,7 @@ export default function App() {
             onSelectNeighbor={(nodeId) => selectResult(nodeId, filters.graphView)}
             onLoadContext={loadContext}
             onPage={setOccurrenceOffset}
-          />
+          />}
         </aside>
       </div>
 

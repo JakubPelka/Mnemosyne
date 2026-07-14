@@ -1,6 +1,7 @@
 import { graphQuery, occurrenceQuery } from "./filters";
 import type {
   EventExcerptPage,
+  ExploreResult,
   GraphFilters,
   GraphResponse,
   MessageContext,
@@ -35,6 +36,18 @@ export const api = {
       `/api/search/events?q=${encodeURIComponent(query)}&limit=12&offset=0&privacy_level=private&content_scope=${contentScope}`,
       signal,
     ),
+  explore: (
+    query: string,
+    filters: GraphFilters,
+    limit: number,
+    offset: number,
+    signal?: AbortSignal,
+  ) => {
+    const params = new URLSearchParams(occurrenceQuery(filters, limit, offset));
+    params.set("q", query);
+    params.set("content_scope", "prose");
+    return request<ExploreResult>(`/api/search/explore?${params}`, signal);
+  },
   topic: (topicId: string, layer: GraphFilters["graphView"], signal?: AbortSignal) =>
     request<TopicDetail>(
       `/api/topics/${encodeURIComponent(topicId)}?privacy_level=private&layer=${layer}`,

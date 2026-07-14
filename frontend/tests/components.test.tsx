@@ -10,9 +10,17 @@ import { detail, occurrences, topic } from "./fixtures";
 
 test("selects a topic from search results", () => {
   const onSelect = vi.fn();
-  render(<TopicSearchResults query="alp" results={[topic]} onSelect={onSelect} />);
+  render(<TopicSearchResults query="alp" results={[topic]} onExplore={vi.fn()} onSelect={onSelect} />);
   fireEvent.click(screen.getByRole("button", { name: /alpha/i }));
   expect(onSelect).toHaveBeenCalledWith("topic-alpha", "terms");
+});
+
+test("offers aggregate exploration before exact records", () => {
+  const onExplore = vi.fn();
+  render(<TopicSearchResults query="synthetic place" results={[topic]} onExplore={onExplore} onSelect={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: /eksploruj.*wszystkie dopasowania/i }));
+  expect(onExplore).toHaveBeenCalledWith("synthetic place");
+  expect(screen.getByRole("list", { name: /dopasowane terminy/i })).toBeInTheDocument();
 });
 
 test("renders empty and backend error states", () => {

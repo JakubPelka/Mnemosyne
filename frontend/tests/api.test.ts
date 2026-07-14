@@ -30,3 +30,15 @@ test("API client passes the segment content scope", async () => {
   expect(url).toContain("/api/search/events?");
   expect(url).toContain("content_scope=code");
 });
+
+test("API client requests deduplicated aggregate exploration", async () => {
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response(JSON.stringify({ query: "synthetic", occurrences: { items: [], total: 0, limit: 12, offset: 0 } }), { status: 200 }),
+  );
+  await api.explore("synthetic place", { ...DEFAULT_FILTERS, startMonth: "2024-01", endMonth: "2024-02" }, 12, 24);
+  const url = String(fetchMock.mock.calls[0][0]);
+  expect(url).toContain("/api/search/explore?");
+  expect(url).toContain("q=synthetic+place");
+  expect(url).toContain("content_scope=prose");
+  expect(url).toContain("offset=24");
+});

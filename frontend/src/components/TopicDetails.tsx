@@ -33,7 +33,6 @@ export function TopicDetails({
   if (!detail)
     return <div className="detail-placeholder">Wybierz węzeł, aby zobaczyć jego historię.</div>;
 
-  const maxIntensity = Math.max(1, ...detail.months.map((month) => month.message_count));
   return (
     <div className="topic-detail">
       <header>
@@ -46,19 +45,7 @@ export function TopicDetails({
         <p className="date-span">{formatDate(detail.first_seen_at)} — {formatDate(detail.last_seen_at)}</p>
       </header>
 
-      <section>
-        <h3>Intensywność miesięczna</h3>
-        {detail.months.length ? (
-          <div className="intensity-chart" aria-label="Miesięczna intensywność węzła">
-            {detail.months.map((month) => (
-              <div className="intensity-column" key={month.month} title={`${month.month}: ${month.message_count}`}>
-                <span style={{ height: `${Math.max(5, (month.message_count / maxIntensity) * 100)}%` }} />
-                <small>{month.month.slice(5)}</small>
-              </div>
-            ))}
-          </div>
-        ) : <p className="muted">Brak zdarzeń z datą.</p>}
-      </section>
+      <section><h3>Intensywność miesięczna</h3><IntensityChart months={detail.months} /></section>
 
       <section>
         <h3>{detail.layer === "terms" ? "Najbliższe terminy" : "Najbliższe tematy"}</h3>
@@ -75,23 +62,7 @@ export function TopicDetails({
 
       <section>
         <h3>Źródłowe fragmenty</h3>
-        {!occurrences?.items.length ? <p className="muted">Brak fragmentów w tym okresie.</p> : (
-          <div className="occurrences">
-            {occurrences.items.map((item) => (
-              <button key={item.event_id} type="button" onClick={() => onLoadContext(item.event_id)}>
-                <span className="occurrence-meta">{matchLabel(item.match_type)} · {item.role ?? "zdarzenie"} · {formatDate(item.occurred_at)}</span>
-                <strong>{item.conversation_title ?? "Bez tytułu"}</strong>
-                <span className="excerpt">{item.snippet || "Brak tekstu"}</span>
-                <code className="source-id" title={item.source_record_id}>{item.source_record_id}</code>
-              </button>
-            ))}
-            <div className="pagination">
-              <button type="button" disabled={occurrences.offset === 0} onClick={() => onPage(Math.max(0, occurrences.offset - occurrences.limit))}>Wstecz</button>
-              <span>{occurrences.offset + 1}–{Math.min(occurrences.total, occurrences.offset + occurrences.items.length)} z {occurrences.total}</span>
-              <button type="button" disabled={occurrences.offset + occurrences.limit >= occurrences.total} onClick={() => onPage(occurrences.offset + occurrences.limit)}>Dalej</button>
-            </div>
-          </div>
-        )}
+        {occurrences && <EventExcerptList occurrences={occurrences} onLoadContext={onLoadContext} onPage={onPage} />}
       </section>
 
       {context && <ContextView context={context} />}
@@ -99,7 +70,32 @@ export function TopicDetails({
   );
 }
 
-function ContextView({ context }: { context: MessageContext }) {
+export function IntensityChart({ months }: { months: TopicDetail["months"] }) {
+  const maxIntensity = Math.max(1, ...months.map((month) => month.message_count));
+  if (!months.length) return <p className="muted">Brak zdarzeń z datą.</p>;
+  return <div className="intensity-chart" aria-label="Miesięczna intensywność węzła">{months.map((month) => (
+    <div className="intensity-column" key={month.month} title={`${month.month}: ${month.message_count}`}>
+      <span style={{ height: `${Math.max(5, (month.message_count / maxIntensity) * 100)}%` }} /><small>{month.month.slice(5)}</small>
+    </div>
+  ))}</div>;
+}
+
+export function EventExcerptList({ occurrences, onLoadContext, onPage }: { occurrences: EventExcerptPage; onLoadContext: (id: string) => void; onPage: (offset: number) => void }) {
+  if (!occurrences.items.length) return <p className="muted">Brak fragmentów w tym okresie.</p>;
+  return <div className="occurrences">{occurrences.items.map((item) => (
+    <button key={item.event_id} type="button" onClick={() => onLoadContext(item.event_id)}>
+      <span className="occurrence-meta">{matchLabel(item.match_type)} · {item.role ?? "zdarzenie"} · {formatDate(item.occurred_at)}</span>
+      <strong>{item.conversation_title ?? "Bez tytułu"}</strong><span className="excerpt">{item.snippet || "Brak tekstu"}</span>
+      <code className="source-id" title={item.source_record_id}>{item.source_record_id}</code>
+    </button>
+  ))}<div className="pagination">
+    <button type="button" disabled={occurrences.offset === 0} onClick={() => onPage(Math.max(0, occurrences.offset - occurrences.limit))}>Wstecz</button>
+    <span>{occurrences.offset + 1}–{Math.min(occurrences.total, occurrences.offset + occurrences.items.length)} z {occurrences.total}</span>
+    <button type="button" disabled={occurrences.offset + occurrences.limit >= occurrences.total} onClick={() => onPage(occurrences.offset + occurrences.limit)}>Dalej</button>
+  </div></div>;
+}
+
+export function ContextView({ context }: { context: MessageContext }) {
   return (
     <section className="context-panel" aria-label="Ograniczony kontekst rozmowy">
       <h3>{context.conversation_title ?? "Kontekst fragmentu"}</h3>
@@ -113,7 +109,7 @@ function ContextView({ context }: { context: MessageContext }) {
   );
 }
 
-function formatDate(value: string | null): string {
+export function formatDate(value: string | null): string {
   if (!value) return "bez daty";
   return new Intl.DateTimeFormat("pl-PL", { year: "numeric", month: "short", day: "numeric" }).format(new Date(value));
 }
