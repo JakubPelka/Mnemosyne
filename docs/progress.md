@@ -264,3 +264,37 @@ Po użytkowej ocenie atlasu dostroić stopwords i progi tematów na podstawie ob
 
 - baza bloku: `1ea6133`;
 - Compose, walidacja i audyt: `2088608`.
+
+## 2026-07-14 — Baseline jakości terminów
+
+### Wykonane zadania
+
+- utworzono gałąź `feat/topic-quality-v1` z czystego `main`;
+- potwierdzono ignorowanie lokalnej bazy, źródeł i przyszłych lokalnych nadpisań;
+- zmierzono strukturę 494 dotychczasowych rekordów bez ujawniania nazw;
+- policzono klasy problemów, rozkłady wiadomości i kontekstów oraz bazowy graf;
+- zapisano bezpieczny raport `docs/reports/2026-07-14-topic-quality-baseline.md`.
+
+### Zmienione pliki
+
+- `docs/reports/2026-07-14-topic-quality-baseline.md`;
+- `docs/progress.md`.
+
+### Testy i wyniki
+
+- audyt ignorowania `sources/`, SQLite i `data/local_topic_overrides.yaml`: zaliczony;
+- śledzone pliki ignorowane: 0;
+- prywatne artefakty w nazwach plików historii: 0;
+- baseline: 445 unigramów, 49 bigramów, 12 terminów z artefaktami i 97 bardzo krótkich;
+- dotychczasowy graf domyślny: 100 węzłów i 99 relacji.
+
+### Decyzje, ograniczenia i następny krok
+
+- pomiar języka jest jawnie heurystyczny i służy wyłącznie klasyfikacji problemu;
+- baseline nie zawiera nazw ani treści z lokalnej bazy;
+- następny krok: trwały model `CandidateTerm → topic_terms → Topic` oraz wyjaśnialne reguły jakości.
+
+### Commity
+
+- baza sprintu: `16f6e86`;
+- bieżący blok: oczekuje na commit.
