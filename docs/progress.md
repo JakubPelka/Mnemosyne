@@ -76,7 +76,7 @@ Ten dokument jest zwięzłym dziennikiem logicznych bloków prac. Szczegółowe 
 ### Commity
 
 - baza bloku: `fdf31a1`;
-- bieżący blok: oczekuje na commit.
+- strojenie promocji na lokalnej bazie: `b8898cb`.
 
 ## 2026-07-13 — Lokalny graf tematów i pierwszy pionowy wycinek API
 

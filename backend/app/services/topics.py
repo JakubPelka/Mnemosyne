@@ -93,7 +93,7 @@ def build_topics(
     max_candidate_terms: int = 5000,
     max_topics: int = 200,
     topics_per_event: int = 5,
-    candidate_terms_per_event: int = 20,
+    candidate_terms_per_event: int = 5,
     include_trigrams: bool = True,
     overrides_path: Path | None = None,
 ) -> TopicBuildResult:

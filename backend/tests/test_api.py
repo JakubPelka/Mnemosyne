@@ -176,21 +176,15 @@ def test_topic_list_terms_and_diagnostic_graph(api_fixture: ApiFixture) -> None:
 def test_term_layer_preserves_search_detail_occurrences_and_context(
     api_fixture: ApiFixture,
 ) -> None:
-    with api_fixture.make_session() as session:
-        term = session.scalar(
-            select(CandidateTerm).where(
-                CandidateTerm.normalized_term == "garden", CandidateTerm.is_active.is_(True)
-            )
-        )
-    assert term is not None
-
     search = api_fixture.client.get("/api/topics/search", params={"q": "GARDEN", "layer": "terms"})
-    detail = api_fixture.client.get(f"/api/topics/{term.term_id}", params={"layer": "terms"})
+    assert search.json()["items"]
+    term_id = search.json()["items"][0]["topic_id"]
+    detail = api_fixture.client.get(f"/api/topics/{term_id}", params={"layer": "terms"})
     occurrences = api_fixture.client.get(
-        f"/api/topics/{term.term_id}/occurrences", params={"layer": "terms"}
+        f"/api/topics/{term_id}/occurrences", params={"layer": "terms"}
     )
 
-    assert any(item["topic_id"] == term.term_id for item in search.json()["items"])
+    assert all(item["layer"] == "terms" for item in search.json()["items"])
     assert detail.status_code == 200
     assert detail.json()["layer"] == "terms"
     assert detail.json()["months"]

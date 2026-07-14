@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from itertools import combinations
 
-from sqlalchemy import select
+from sqlalchemy import distinct, func, select
 from sqlalchemy.orm import Session
 
 from backend.app.models import CandidateTerm, Event, EventCandidateTerm, EventTopic, Source, Topic
@@ -182,6 +182,45 @@ def get_candidate_term_graph(
     neighbors_only: bool = False,
     include_rejected: bool = False,
 ) -> TopicGraph:
+    filters = [Event.is_active.is_(True), Event.privacy_level == privacy_level]
+    if not include_rejected:
+        filters.append(CandidateTerm.is_active.is_(True))
+    if start is not None:
+        filters.append(Event.timestamp_start >= start)
+    if end is not None:
+        filters.append(Event.timestamp_start < end)
+    if source_type is not None:
+        filters.append(Source.source_type == source_type)
+
+    ranked = session.execute(
+        select(
+            CandidateTerm.term_id,
+            func.count(distinct(Event.event_id)).label("event_count"),
+        )
+        .join(EventCandidateTerm, EventCandidateTerm.term_id == CandidateTerm.term_id)
+        .join(Event, Event.event_id == EventCandidateTerm.event_id)
+        .join(Source, Source.source_id == Event.source_id)
+        .where(*filters)
+        .group_by(CandidateTerm.term_id)
+        .having(func.count(distinct(Event.event_id)) >= min_occurrences)
+        .order_by(func.count(distinct(Event.event_id)).desc(), CandidateTerm.term_id)
+        .limit(node_limit)
+    ).all()
+    visible_ids = [term_id for term_id, _count in ranked]
+    if selected_term_id and selected_term_id not in visible_ids:
+        selected_count = session.scalar(
+            select(func.count(distinct(Event.event_id)))
+            .select_from(CandidateTerm)
+            .join(EventCandidateTerm, EventCandidateTerm.term_id == CandidateTerm.term_id)
+            .join(Event, Event.event_id == EventCandidateTerm.event_id)
+            .join(Source, Source.source_id == Event.source_id)
+            .where(*filters, CandidateTerm.term_id == selected_term_id)
+        )
+        if selected_count and selected_count >= min_occurrences:
+            visible_ids = [*visible_ids[:-1], selected_term_id]
+    if not visible_ids:
+        return TopicGraph(nodes=(), edges=())
+
     statement = (
         select(
             Event.event_id,
@@ -194,16 +233,8 @@ def get_candidate_term_graph(
         .join(EventCandidateTerm, EventCandidateTerm.event_id == Event.event_id)
         .join(CandidateTerm, CandidateTerm.term_id == EventCandidateTerm.term_id)
         .join(Source, Source.source_id == Event.source_id)
-        .where(Event.is_active.is_(True), Event.privacy_level == privacy_level)
+        .where(*filters, CandidateTerm.term_id.in_(visible_ids))
     )
-    if not include_rejected:
-        statement = statement.where(CandidateTerm.is_active.is_(True))
-    if start is not None:
-        statement = statement.where(Event.timestamp_start >= start)
-    if end is not None:
-        statement = statement.where(Event.timestamp_start < end)
-    if source_type is not None:
-        statement = statement.where(Source.source_type == source_type)
     rows = (
         (event_id, context_id, timestamp, term_id, term, f"candidate_{status}")
         for event_id, context_id, timestamp, term_id, term, status in session.execute(statement)
