@@ -638,4 +638,44 @@ Wykonać końcowy audyt Git i walidację pełnego zestawu poleceń, a następnie
 ### Commity
 
 - baza bloku: `bcd35d4`;
-- implementacja segmentacji: oczekuje na commit.
+- implementacja segmentacji: `4fb8e7b`.
+
+## 2026-07-14 — Walidacja naprawy regresji Topic Quality
+
+### Wykonane zadania
+
+- wykonano kontrolę migracji, testów, formatowania, integralności lokalnej bazy i działania Compose;
+- przeprowadzono audyt bieżącego drzewa oraz osiągalnej historii bez wypisywania prywatnej treści;
+- zapisano raport `docs/reports/2026-07-14-topic-quality-regression-fix.md`;
+- pozostawiono unieważniony raport pierwszej implementacji jako jawny zapis historyczny.
+
+### Zmienione pliki
+
+- `docs/progress.md`;
+- `docs/reports/2026-07-14-topic-quality-regression-fix.md`.
+
+### Testy i wyniki
+
+- backend: 43 testy, Ruff i Alembic zaliczone;
+- frontend: 13 testów i build zaliczone po implementacji;
+- końcowa próba ponowienia testów frontendowych nie uruchomiła się z powodu braku Node na hoście i odmowy dostępu bieżącej sesji do demona Docker; kod frontendu nie zmienił się od poprzedniego zaliczonego przebiegu;
+- audyt Git: brak śledzonych baz, eksportów, archiwów, logów, sekretów i jawnych lokalnych ścieżek.
+
+### Decyzje techniczne
+
+- naprawa pozostaje na `feat/topic-quality-v1`; nie jest scalana z `main` ani publikowana bez kolejnego polecenia użytkownika;
+- raport ukończenia opiera się na wynikach testów, migracji, Compose i sprawdzalnych agregatach, nie na deklaracji.
+
+### Znane ograniczenia i otwarte kwestie
+
+- nieśledzony plik użytkownika `start.sh` pozostaje nietknięty i poza zakresem commitów;
+- bieżące środowisko wykonawcze nie pozwoliło powtórzyć wcześniej zaliczonego przebiegu frontendowego przez Docker.
+
+### Następny krok
+
+Ocenić wizualnie jakość tematów beta, a po akceptacji zdecydować osobno o publikacji gałęzi.
+
+### Commity
+
+- segmentacja: `4fb8e7b`;
+- końcowa walidacja i raport: commit zawierający niniejszy wpis.
