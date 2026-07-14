@@ -17,6 +17,7 @@ from backend.app.models import (
     EventTopic,
     Source,
     Topic,
+    TopicRelation,
 )
 from backend.app.services.analysis_runs import active_analysis_run_id
 
@@ -148,6 +149,29 @@ def get_topic_graph(
                 weight=weight,
             )
         )
+
+    use_stored_relations = (
+        start is None and end is None and source_type is None and privacy_level == "private"
+    )
+    if use_stored_relations:
+        edges = [
+            TopicGraphEdge(*row)
+            for row in session.execute(
+                select(
+                    TopicRelation.source_topic_id,
+                    TopicRelation.target_topic_id,
+                    TopicRelation.message_count,
+                    TopicRelation.conversation_count,
+                    TopicRelation.weight,
+                ).where(
+                    TopicRelation.analysis_run_id == analysis_run_id,
+                    TopicRelation.source_topic_id.in_(visible_set),
+                    TopicRelation.target_topic_id.in_(visible_set),
+                    TopicRelation.message_count >= min_edge_messages,
+                    TopicRelation.weight >= min_relation_weight,
+                )
+            )
+        ]
 
     if neighbors_only and selected_topic_id is not None:
         neighbor_ids = {selected_topic_id}
@@ -281,10 +305,7 @@ def get_candidate_term_graph(
         for event_id, context_id, timestamp, term_id, term, status in session.execute(statement)
     )
     use_stored_relations = (
-        start is None
-        and end is None
-        and source_type is None
-        and privacy_level == "private"
+        start is None and end is None and source_type is None and privacy_level == "private"
     )
     graph = _assemble_graph(
         rows,

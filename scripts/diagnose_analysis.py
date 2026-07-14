@@ -146,7 +146,9 @@ def _graph(session: object, layer: str) -> dict[str, object]:
     )
     active_candidates = int(
         session.scalar(
-            select(func.count()).select_from(CandidateTerm).where(
+            select(func.count())
+            .select_from(CandidateTerm)
+            .where(
                 CandidateTerm.analysis_run_id == run_id,
                 CandidateTerm.is_active,
             )
@@ -168,7 +170,9 @@ def _graph(session: object, layer: str) -> dict[str, object]:
         ),
         "relation_source": ("candidate_term_relations" if layer == "terms" else "topic_relations"),
         "filters_active_run": True,
-        "edge_filter_preserves_nodes": layer == "topics" or not active_candidates or bool(graph.nodes),
+        "edge_filter_preserves_nodes": layer == "topics"
+        or not active_candidates
+        or bool(graph.nodes),
     }
 
 
@@ -207,10 +211,12 @@ def _term(session: object, value: str) -> dict[str, object]:
     )
     topic_count = int(
         session.scalar(
-        select(func.count()).select_from(Topic).where(
-            func.lower(Topic.name) == normalized,
-            Topic.analysis_run_id == active_id,
-        )
+            select(func.count())
+            .select_from(Topic)
+            .where(
+                func.lower(Topic.name) == normalized,
+                Topic.analysis_run_id == active_id,
+            )
         )
         or 0
     )
