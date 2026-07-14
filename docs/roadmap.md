@@ -16,7 +16,7 @@ Ta lista odzwierciedla aktualne wymagania produktu. Trwałe instrukcje znajdują
 - [x] Opisać lokalne przetwarzanie, katalogi prywatne, usuwanie danych i audyt przed publikacją w `docs/privacy.md`.
 - [x] Ustalić, że surowe dane pozostają lokalnie w `sources/` i są otwierane tylko do odczytu.
 - [x] Ustalić domyślny `privacy_level=private` dla danych importowanych.
-- [ ] Przeprowadzić pełny audyt kodu, bieżących plików i historii przed ewentualnym upublicznieniem projektu.
+- [x] Przeprowadzić pełny audyt kodu, bieżących plików i historii przed ewentualnym upublicznieniem projektu.
 - [x] Oznaczyć faktyczny status repozytorium jako `TEMP PUBLIC` i wymagać audytu przed każdym push.
 - [ ] Dodać licencję, kiedy zostanie podjęta decyzja o sposobie dystrybucji.
 
@@ -30,8 +30,8 @@ Ta lista odzwierciedla aktualne wymagania produktu. Trwałe instrukcje znajdują
 - [x] Dodać minimalną aplikację FastAPI z endpointem `/health`.
 - [x] Przygotować `.env.example`, `pyproject.toml`, Dockerfile i `docker-compose.yml`.
 - [x] Uruchomić i zweryfikować backend w czystym środowisku lokalnym.
-- [ ] Uruchomić i zweryfikować backend przez Docker Compose.
-- [ ] Dodać właściwy szkielet aplikacji Vite/React — **częściowo**: istnieją zależności i katalog frontendu, ale brak punktu wejścia UI.
+- [x] Uruchomić i zweryfikować backend przez Docker Compose.
+- [x] Dodać właściwy szkielet aplikacji Vite/React i punkt wejścia UI.
 - [ ] Dodać wspólną obsługę konfiguracji, bez zapisywania sekretów w repozytorium.
 - [ ] Dodać bezpieczne logowanie strukturalne bez tekstu wiadomości i prywatnych ścieżek.
 
@@ -108,6 +108,12 @@ Ta lista odzwierciedla aktualne wymagania produktu. Trwałe instrukcje znajdują
 - [x] Obliczać intensywność tematu w poszczególnych miesiącach.
 - [x] Zachować analizę niezależną od formatu ChatGPT.
 - [x] Nie budować na tym etapie pełnej ontologii ani „cyfrowego bliźniaka”.
+- [x] Oddzielić trwałe surowe `CandidateTerm` od prezentacyjnych `Topic`.
+- [x] Zachowywać ocenę jakości i powód odrzucenia bez kasowania kandydatów.
+- [x] Odfiltrować stopwords PL/SV/EN oraz artefakty eksportu i cytowań.
+- [x] Preferować informacyjne frazy nad ich ogólnymi unigramami.
+- [x] Dodać stabilne identyfikatory, aliasy i lokalne ręczne nadpisania.
+- [x] Zweryfikować idempotentną przebudowę i migrację istniejącej lokalnej bazy.
 
 ## 7. Graf relacji tematów
 
@@ -134,6 +140,8 @@ Ta lista odzwierciedla aktualne wymagania produktu. Trwałe instrukcje znajdują
 - [x] Zwracać stabilny wewnętrzny identyfikator źródła.
 - [x] Nie zwracać automatycznie całej historii rozmowy.
 - [x] Uwzględnić `source_type` oraz `privacy_level` w kontraktach API.
+- [x] Udostępnić listę aktywnych tematów i przypisane im terminy.
+- [x] Dodać jawny diagnostyczny widok surowych terminów bez zmiany domyślnego grafu.
 
 ## 9. Webowy interfejs MVP
 
@@ -151,6 +159,8 @@ Ta lista odzwierciedla aktualne wymagania produktu. Trwałe instrukcje znajdują
 - [x] Pokazać listę rozmów i fragmentów źródłowych.
 - [x] Po wybraniu fragmentu załadować jego treść, datę, tytuł rozmowy, stabilny identyfikator i ograniczony kontekst.
 - [x] Nie ładować całych rozmów automatycznie.
+- [x] Pokazywać domyślnie maksymalnie 30 właściwych tematów.
+- [x] Dodać mały przełącznik diagnostyczny tematów i surowych terminów.
 
 ## 10. Kryteria ukończenia MVP
 

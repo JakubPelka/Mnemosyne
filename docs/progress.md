@@ -466,4 +466,52 @@ Przeprowadzić pełną walidację, migrację kopii i rzeczywistej lokalnej bazy,
 ### Commity
 
 - baza bloku: `ce10529`;
-- bieżący blok: oczekuje na commit.
+- domyślny graf tematów w UI: `1703ab7`.
+
+## 2026-07-14 — Walidacja kamienia milowego Topic Quality v1
+
+### Wykonane zadania
+
+- zmigrowano najpierw kopię, a następnie właściwą lokalną bazę;
+- przebudowano analizę dwukrotnie i porównano bezpieczne agregaty;
+- sprawdzono integralność SQLite, klucze obce, brak duplikatów i dryfu migracji;
+- zweryfikowano oba widoki grafu na lokalnych danych bez ujawniania nazw;
+- zbudowano i uruchomiono cały stos Compose, sprawdzono healthchecki, HTTP i montowania;
+- wykonano audyt bieżącego drzewa i historii Git;
+- utworzono raport `docs/reports/2026-07-14-topic-quality-v1.md` i zaktualizowano roadmapę.
+
+### Zmienione pliki
+
+- `README.md`;
+- `docs/roadmap.md`, `docs/progress.md`;
+- `docs/reports/2026-07-14-topic-quality-v1.md`.
+
+### Testy i wyniki
+
+- pełny `pytest -q`: 34 zaliczone;
+- Ruff check i format: zaliczone;
+- Alembic check, integralność SQLite i klucze obce: zaliczone;
+- frontend: 11 testów, build i audit bez podatności;
+- Compose: backend i frontend zdrowe, lokalne endpointy odpowiadają;
+- audyt Git: brak prywatnych eksportów, baz, archiwów, sekretów i lokalnych ścieżek.
+
+### Decyzje techniczne
+
+- rzeczywiste wyniki dokumentowane są wyłącznie jako liczniki;
+- strukturalna ocena grafu zastępuje zapisywanie zrzutu z prywatnymi etykietami;
+- kopia bazy sprzed migracji znajduje się tymczasowo poza repozytorium w `/tmp` i nie jest śledzona.
+
+### Znane ograniczenia i otwarte kwestie
+
+- przebudowa trwa 33,11 s i osiąga około 2,18 GiB pamięci szczytowej;
+- Compose 1.29 wymagał usunięcia starego kontenera po błędzie zgodności `ContainerConfig`;
+- następna ocena jakości powinna być wykonana przez właściciela wizualnie, bez utrwalania prywatnych etykiet.
+
+### Następny krok
+
+Zoptymalizować pamięć ekstrakcji, a następnie dostroić heurystyki na podstawie lokalnej oceny 180 tematów.
+
+### Commity
+
+- baza bloku: `1703ab7`;
+- końcowa walidacja i raport: commit zawierający tę sekcję.

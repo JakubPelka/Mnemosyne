@@ -57,8 +57,10 @@ Lokalne endpointy danych:
 
 - `GET /api/meta` — bezpieczne metadane zakresu i liczników;
 - `GET /api/graph` — graf z filtrami czasu, progów, źródła i sąsiadów;
+- `GET /api/topics` — paginowana lista aktywnych tematów;
 - `GET /api/topics/search` — wyszukiwanie tematów;
 - `GET /api/topics/{topic_id}` — statystyki, intensywność i relacje;
+- `GET /api/topics/{topic_id}/terms` — terminy i aliasy tworzące temat;
 - `GET /api/topics/{topic_id}/occurrences` — paginowane fragmenty źródłowe;
 - `GET /api/search/events` — lokalne wyszukiwanie FTS5;
 - `GET /api/topics/{topic_id}/intensity` — miesięczna intensywność;
@@ -75,6 +77,6 @@ python scripts/build_topic_graph.py
 
 Importer przyjmuje również rozpakowany katalog. Domyślna baza `data/mnemosyne.sqlite3` oraz całe `sources/` są ignorowane przez Git. Ponowny import aktualizuje istniejące rekordy i nie tworzy duplikatów.
 
-Budowa tematów działa całkowicie lokalnie i wypisuje wyłącznie liczniki — nie nazwy tematów ani treść wiadomości.
+Budowa tematów działa całkowicie lokalnie i wypisuje wyłącznie liczniki — nie nazwy tematów ani treść wiadomości. Surowe kandydaty pozostają w bazie wraz z oceną jakości, natomiast domyślny graf pokazuje tylko aktywne tematy. Bezpieczny przykład ręcznych aliasów znajduje się w `sample_data/topic_overrides.example.yaml`; prawdziwe mapowania można zapisać w ignorowanym `data/local_topic_overrides.yaml`.
 
 Szczegóły projektu znajdują się w [`docs/architecture.md`](docs/architecture.md), a zasady bezpieczeństwa w [`docs/privacy.md`](docs/privacy.md).
