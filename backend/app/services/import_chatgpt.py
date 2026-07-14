@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from sqlalchemy.dialects.sqlite import insert
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from backend.app.importers.chatgpt import ChatGPTConversation, ChatGPTExportAdapter
@@ -19,6 +19,7 @@ from backend.app.models import (
     ImportRun,
     Source,
 )
+from backend.app.services.segments import rebuild_event_segments
 
 _BATCH_SIZE = 100
 
@@ -101,6 +102,16 @@ def import_chatgpt_export(
     run.imported_conversations = conversation_count
     run.imported_events = event_count
     run.warning_count = len(adapter.warnings)
+    active_text_events = set(
+        session.scalars(
+            select(Event.event_id).where(
+                Event.source_id == source_id,
+                Event.is_active.is_(True),
+                Event.text.is_not(None),
+            )
+        )
+    )
+    rebuild_event_segments(session, event_ids=active_text_events)
     session.commit()
     return ImportResult(run_id, conversation_count, event_count, len(adapter.warnings))
 

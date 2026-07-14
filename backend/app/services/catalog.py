@@ -94,6 +94,7 @@ class EventExcerpt:
     conversation_title: str | None
     snippet: str
     source_record_id: str
+    match_type: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -487,6 +488,7 @@ def search_events(
     privacy_level: str = "private",
     limit: int = 20,
     offset: int = 0,
+    content_scope: str = "all",
 ) -> EventExcerptPage:
     match_query = _fts_query(query)
     filters = ["events.is_active = 1", "events.privacy_level = :privacy_level"]
@@ -501,30 +503,61 @@ def search_events(
         filters.append("sources.source_type = :source_type")
         parameters["source_type"] = source_type
     where = " AND ".join(filters)
+    scope_types = {
+        "all": None,
+        "prose": ("prose", "quote"),
+        "code": ("code", "inline_code"),
+        "commands": ("shell_command",),
+        "logs": ("log",),
+    }
+    if content_scope not in scope_types:
+        raise ValueError("invalid_content_scope")
+    selected_types = scope_types[content_scope]
+    if selected_types:
+        placeholders = []
+        for index, segment_type in enumerate(selected_types):
+            key = f"scope_{index}"
+            placeholders.append(f":{key}")
+            parameters[key] = segment_type
+        filters.append(f"event_segments.segment_type IN ({', '.join(placeholders)})")
+    filters.append("event_segments.search_enabled = 1")
+    where = " AND ".join(filters)
     from_clause = (
-        "events_fts JOIN events ON events.rowid = events_fts.rowid "
+        "event_segments_fts JOIN event_segments "
+        "ON event_segments.rowid = event_segments_fts.rowid "
+        "JOIN events ON events.event_id = event_segments.event_id "
         "JOIN sources ON sources.source_id = events.source_id "
         "LEFT JOIN chatgpt_messages ON chatgpt_messages.event_id = events.event_id"
     )
     total = session.scalar(
-        text(f"SELECT count(*) FROM {from_clause} WHERE events_fts MATCH :query AND {where}"),
+        text(
+            f"SELECT count(*) FROM {from_clause} WHERE event_segments_fts MATCH :query AND {where}"
+        ),
         parameters,
     )
     parameters.update({"limit": limit, "offset": offset})
     rows = session.execute(
         text(
             "SELECT events.event_id, events.timestamp_start, chatgpt_messages.role, "
-            "events.title, snippet(events_fts, 1, '', '', ' … ', 32), "
-            f"events.source_record_id FROM {from_clause} "
-            f"WHERE events_fts MATCH :query AND {where} "
-            "ORDER BY bm25(events_fts), events.timestamp_start DESC "
+            "events.title, snippet(event_segments_fts, 0, '', '', ' … ', 32), "
+            f"events.source_record_id, event_segments.segment_type FROM {from_clause} "
+            f"WHERE event_segments_fts MATCH :query AND {where} "
+            "ORDER BY bm25(event_segments_fts), events.timestamp_start DESC "
             "LIMIT :limit OFFSET :offset"
         ),
         parameters,
     )
     items = tuple(
-        EventExcerpt(event_id, occurred_at, role, title, _snippet(body), source_record_id)
-        for event_id, occurred_at, role, title, body, source_record_id in rows
+        EventExcerpt(
+            event_id,
+            occurred_at,
+            role,
+            title,
+            _snippet(body),
+            source_record_id,
+            match_type,
+        )
+        for event_id, occurred_at, role, title, body, source_record_id, match_type in rows
     )
     return EventExcerptPage(items=items, total=int(total or 0), limit=limit, offset=offset)
 

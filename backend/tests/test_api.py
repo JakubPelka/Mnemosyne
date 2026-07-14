@@ -249,6 +249,7 @@ def test_occurrences_are_paginated_filtered_and_excerpted(api_fixture: ApiFixtur
         "conversation_title",
         "snippet",
         "source_record_id",
+        "match_type",
     }
     assert "messages" not in body["items"][0]
     assert "text" not in body["items"][0]
@@ -273,6 +274,7 @@ def test_fts_search_uses_pagination_time_source_and_privacy(api_fixture: ApiFixt
     assert page.json()["total"] >= 1
     assert len(page.json()["items"]) <= 2
     assert all("text" not in item and "messages" not in item for item in page.json()["items"])
+    assert all(item["match_type"] == "prose" for item in page.json()["items"])
     assert no_time_match.json()["total"] == 0
     assert no_source_match.json()["total"] == 0
 

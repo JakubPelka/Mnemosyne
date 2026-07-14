@@ -591,3 +591,51 @@ Zoptymalizować pamięć ekstrakcji, a następnie dostroić heurystyki na podsta
 
 - baza bloku: `1703ab7`;
 - końcowa walidacja i raport: `45d1097`.
+
+## 2026-07-14 — Segmentacja prozy, kodu, komend i logów
+
+### Wykonane zadania
+
+- dodano regenerowalny model `EventSegment`, migrację i osobny indeks FTS5 segmentów;
+- parser zachowuje kolejność prozy, kodu inline i blokowego, komend, logów, cytatów, tabel, linków oraz artefaktów narzędziowych;
+- analiza tematów korzysta wyłącznie z segmentów dopuszczonych do analizy, podczas gdy kod i logi pozostają wyszukiwalne;
+- dodano zakres wyszukiwania `all|prose|code|commands|logs`, typ dopasowania oraz etykiety w UI;
+- import i przebudowa grafu odtwarzają segmenty deterministycznie bez zmiany pełnego `Event.text`;
+- zmigrowano i przebudowano lokalną bazę, raportując wyłącznie agregaty.
+
+### Zmienione pliki
+
+- modele, migracje i usługi w `backend/app/` oraz `backend/migrations/`;
+- kontrakty API i testy backendu;
+- klient API, widok wyszukiwania treści i testy frontendu;
+- `README.md`, `docs/architecture.md`, `docs/roadmap.md` i ADR 0008.
+
+### Testy i wyniki
+
+- backend: 43 testy zaliczone;
+- frontend: 13 testów zaliczonych, produkcyjny build poprawny;
+- migracja kopii i właściwej lokalnej bazy: integralność SQLite `ok`, 0 naruszeń kluczy obcych;
+- 115 470 segmentów i odpowiadających wpisów FTS; przebudowa trwała 47,42 s i osiągnęła około 1,57 GiB pamięci szczytowej;
+- Compose na alternatywnych portach: obie usługi zdrowe, wyszukiwanie każdego zakresu zwracało właściwy typ segmentu, montowanie źródeł pozostało tylko do odczytu;
+- wyszukiwanie syntetycznego i lokalnego akronimu działa bez względu na wielkość liter; żaden z kontrolnych tokenów kodowych nie jest aktywnym tematem.
+
+### Decyzje techniczne
+
+- pełny tekst zdarzenia pozostaje źródłem kontekstu, a segmenty są odtwarzalną warstwą analityczną;
+- proza ma wagę `1.0`, cytat `0.3`, a kod, komendy i logi `0.0` dla tematów;
+- przyszły graf techniczny będzie osobną warstwą i nie zostanie połączony z głównym grafem rozmów.
+
+### Znane ograniczenia i otwarte kwestie
+
+- rozpoznawanie segmentów jest heurystyczne i będzie wymagało rozszerzeń dla nietypowego Markdownu oraz nieoznaczonych wyjść terminala;
+- przebudowa całego lokalnego korpusu nadal ma zauważalny koszt pamięci;
+- jakość 200 tematów beta wymaga wizualnej oceny właściciela; system nie promuje już singletonów tylko po to, aby wypełnić graf.
+
+### Następny krok
+
+Wykonać końcowy audyt Git i walidację pełnego zestawu poleceń, a następnie zamknąć naprawę regresji jednym raportem kamienia milowego.
+
+### Commity
+
+- baza bloku: `bcd35d4`;
+- implementacja segmentacji: oczekuje na commit.

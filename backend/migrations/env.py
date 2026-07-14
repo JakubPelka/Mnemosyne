@@ -27,7 +27,9 @@ def include_object(
 ) -> bool:
     """Keep FTS5 virtual/shadow tables outside SQLAlchemy schema diffs."""
     del object_, type_, compare_to
-    return not (reflected and name is not None and name.startswith("events_fts"))
+    return not (
+        reflected and name is not None and name.startswith(("events_fts", "event_segments_fts"))
+    )
 
 
 # other values from the config, defined by the needs of env.py,

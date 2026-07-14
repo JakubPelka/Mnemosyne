@@ -132,6 +132,7 @@ class EventExcerptResponse(BaseModel):
     conversation_title: str | None
     snippet: str
     source_record_id: str
+    match_type: str | None = None
 
 
 class PaginatedEventExcerptResponse(BaseModel):

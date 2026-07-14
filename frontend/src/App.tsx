@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 import { DEFAULT_FILTERS, monthFromDate } from "./filters";
 import { FilterPanel } from "./components/FilterPanel";
+import { ContentSearchResults } from "./components/ContentSearchResults";
 import { GraphCanvas } from "./components/GraphCanvas";
 import { StatusPanel } from "./components/StatusPanel";
 import { TopicDetails } from "./components/TopicDetails";
@@ -31,6 +32,9 @@ export default function App() {
   const [occurrenceOffset, setOccurrenceOffset] = useState(0);
   const [search, setSearch] = useState("");
   const [searchResults, setSearchResults] = useState<TopicSearchItem[]>([]);
+  const [contentSearch, setContentSearch] = useState("");
+  const [contentScope, setContentScope] = useState<"all" | "prose" | "code" | "commands" | "logs">("all");
+  const [contentResults, setContentResults] = useState<EventExcerptPage["items"]>([]);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -119,6 +123,25 @@ export default function App() {
     };
   }, [search]);
 
+  useEffect(() => {
+    if (!contentSearch.trim()) {
+      setContentResults([]);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      api.searchEvents(contentSearch.trim(), contentScope, controller.signal)
+        .then((response) => setContentResults(response.items))
+        .catch((reason: Error) => {
+          if (reason.name !== "AbortError") setDetailError(reason.message);
+        });
+    }, 220);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [contentScope, contentSearch]);
+
   const selectResult = useCallback((topicId: string, layer: "terms" | "topics") => {
     setDraftFilters((value) => ({ ...value, graphView: layer }));
     setFilters((value) => ({ ...value, graphView: layer }));
@@ -176,6 +199,21 @@ export default function App() {
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="np. projekt" />
           </label>
           <TopicSearchResults query={search} results={searchResults} onSelect={selectResult} />
+          <label className="search-box">
+            <span>Wyszukaj treść</span>
+            <input value={contentSearch} onChange={(event) => setContentSearch(event.target.value)} placeholder="proza, kod lub log" />
+          </label>
+          <label>
+            Zakres treści
+            <select value={contentScope} onChange={(event) => setContentScope(event.target.value as typeof contentScope)}>
+              <option value="all">Wszystko</option>
+              <option value="prose">Proza</option>
+              <option value="code">Kod</option>
+              <option value="commands">Komendy</option>
+              <option value="logs">Logi</option>
+            </select>
+          </label>
+          <ContentSearchResults query={contentSearch} results={contentResults} onSelect={loadContext} />
           <FilterPanel
             filters={draftFilters}
             meta={meta}

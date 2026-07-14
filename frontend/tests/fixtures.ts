@@ -26,5 +26,5 @@ export const occurrences: EventExcerptPage = {
   total: 1,
   limit: 12,
   offset: 0,
-  items: [{ event_id: "event-one", occurred_at: null, role: "user", conversation_title: "Synthetic context", snippet: "Synthetic excerpt", source_record_id: "stable-one" }],
+  items: [{ event_id: "event-one", occurred_at: null, role: "user", conversation_title: "Synthetic context", snippet: "Synthetic excerpt", source_record_id: "stable-one", match_type: "code" }],
 };

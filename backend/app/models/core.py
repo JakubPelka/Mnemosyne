@@ -70,6 +70,31 @@ class Event(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class EventSegment(Base):
+    __tablename__ = "event_segments"
+    __table_args__ = (
+        UniqueConstraint("event_id", "segment_index"),
+        CheckConstraint(
+            "segment_type IN ('prose', 'code', 'inline_code', 'shell_command', 'log', "
+            "'quote', 'table', 'tool_artifact', 'link', 'unknown')",
+            name="event_segment_type",
+        ),
+    )
+
+    segment_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    event_id: Mapped[str] = mapped_column(
+        ForeignKey("events.event_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    segment_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    segment_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    language: Mapped[str | None] = mapped_column(String(32))
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    analysis_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    search_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    topic_weight: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class Entity(Base):
     __tablename__ = "entities"
     __table_args__ = (UniqueConstraint("entity_type", "normalized_name"),)

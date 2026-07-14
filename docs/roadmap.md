@@ -114,6 +114,11 @@ Ta lista odzwierciedla aktualne wymagania produktu. Trwałe instrukcje znajdują
 - [x] Preferować informacyjne frazy nad ich ogólnymi unigramami.
 - [x] Dodać stabilne identyfikatory, aliasy i lokalne ręczne nadpisania.
 - [x] Zweryfikować idempotentną przebudowę i migrację istniejącej lokalnej bazy.
+- [x] Podzielić mieszane wiadomości na uporządkowane `EventSegment` bez utraty `Event.text`.
+- [x] Wyłączyć kod, komendy i logi z głównej analizy tematów.
+- [x] Zachować wyszukiwanie kodu, komend i logów przez osobny FTS segmentów.
+- [x] Zwracać typ dopasowanego segmentu i zachować otwieranie kontekstu wiadomości.
+- [x] Zweryfikować idempotentną segmentację oraz migrację istniejącej bazy.
 
 ## 7. Graf relacji tematów
 
@@ -141,7 +146,8 @@ Ta lista odzwierciedla aktualne wymagania produktu. Trwałe instrukcje znajdują
 - [x] Nie zwracać automatycznie całej historii rozmowy.
 - [x] Uwzględnić `source_type` oraz `privacy_level` w kontraktach API.
 - [x] Udostępnić listę aktywnych tematów i przypisane im terminy.
-- [x] Dodać jawny diagnostyczny widok surowych terminów bez zmiany domyślnego grafu.
+- [x] Dodać jawne warstwy `terms` i `topics`, z użyteczną eksploracją terminów jako widokiem domyślnym.
+- [x] Dodać zakres treści `all|prose|code|commands|logs` do wyszukiwania zdarzeń.
 
 ## 9. Webowy interfejs MVP
 
@@ -159,8 +165,9 @@ Ta lista odzwierciedla aktualne wymagania produktu. Trwałe instrukcje znajdują
 - [x] Pokazać listę rozmów i fragmentów źródłowych.
 - [x] Po wybraniu fragmentu załadować jego treść, datę, tytuł rozmowy, stabilny identyfikator i ograniczony kontekst.
 - [x] Nie ładować całych rozmów automatycznie.
-- [x] Pokazywać domyślnie maksymalnie 30 właściwych tematów.
-- [x] Dodać mały przełącznik diagnostyczny tematów i surowych terminów.
+- [x] Pokazywać domyślnie maksymalnie 30 aktywnych terminów.
+- [x] Dodać przełącznik „Terminy / Tematy (beta)” bez sztucznego wypełniania warstwy tematów.
+- [x] Dodać wyszukiwanie treści z etykietami typu segmentu i ładowaniem kontekstu.
 
 ## 10. Kryteria ukończenia MVP
 

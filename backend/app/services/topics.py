@@ -18,6 +18,7 @@ from backend.app.models import (
     CandidateTerm,
     Event,
     EventCandidateTerm,
+    EventSegment,
     EventTopic,
     Topic,
     TopicRelation,
@@ -32,6 +33,7 @@ from backend.app.nlp.quality import (
     term_tokens,
 )
 from backend.app.services.topic_overrides import TopicOverride, load_topic_overrides
+from backend.app.services.segments import rebuild_event_segments
 
 _TEXT_TOKEN_PATTERN = re.compile(r"[^\W_]+(?:[-+.#][^\W_]+)*", re.UNICODE)
 
@@ -111,6 +113,7 @@ def build_topics(
     ):
         raise ValueError("topic_build_limits_must_be_positive")
 
+    rebuild_event_segments(session)
     documents = _load_documents(session, include_trigrams=include_trigrams)
     document_frequency: Counter[str] = Counter()
     term_contexts: dict[str, set[str]] = defaultdict(set)
@@ -280,23 +283,36 @@ def extract_acronyms(text: str) -> frozenset[str]:
 
 def _load_documents(session: Session, *, include_trigrams: bool) -> list[_Document]:
     rows = session.execute(
-        select(Event.event_id, Event.context_id, Event.timestamp_start, Event.text).where(
+        select(
+            Event.event_id,
+            Event.context_id,
+            Event.timestamp_start,
+            EventSegment.text,
+            EventSegment.topic_weight,
+        )
+        .join(EventSegment, EventSegment.event_id == Event.event_id)
+        .where(
             Event.is_active.is_(True),
             Event.analysis_enabled.is_(True),
-            Event.text.is_not(None),
+            EventSegment.analysis_enabled.is_(True),
+            EventSegment.topic_weight > 0,
         )
     )
-    return [
-        _Document(
+    documents: dict[str, _Document] = {}
+    for event_id, context_id, timestamp, text, weight in rows:
+        terms = extract_candidate_terms(text, include_trigrams=include_trigrams)
+        weighted = Counter({term: count * float(weight) for term, count in terms.items()})
+        previous = documents.get(event_id)
+        documents[event_id] = _Document(
             event_id=event_id,
             context_id=context_id or event_id,
             timestamp=timestamp,
-            terms=extract_candidate_terms(text, include_trigrams=include_trigrams),
-            acronyms=extract_acronyms(text),
+            terms=(previous.terms + weighted) if previous else weighted,
+            acronyms=(previous.acronyms | extract_acronyms(text))
+            if previous
+            else extract_acronyms(text),
         )
-        for event_id, context_id, timestamp, text in rows
-        if text and text.strip()
-    ]
+    return list(documents.values())
 
 
 def _candidate_metrics(

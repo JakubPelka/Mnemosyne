@@ -108,6 +108,8 @@ def test_migration_creates_shared_schema_and_fts(tmp_path: Path) -> None:
         "candidate_terms",
         "event_candidate_terms",
         "topic_terms",
+        "event_segments",
+        "event_segments_fts",
     } <= tables
 
 

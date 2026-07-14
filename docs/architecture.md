@@ -6,6 +6,7 @@
 prywatne źródło (tylko odczyt)
   -> SourceAdapter
   -> Source + Event + rekord źródłowy
+  -> EventSegments (proza / kod / komendy / logi)
   -> CandidateTerms -> Topics / Entities / Relations
   -> API
   -> Graph + Timeline + Source Browser
@@ -21,7 +22,7 @@ Format ChatGPT nie jest modelem domenowym aplikacji. `ChatGPTExportAdapter` będ
 - `backend/app/api`: filtrowanie po czasie, źródle i poziomie prywatności;
 - `frontend`: graf, oś czasu i kontekst fragmentu.
 
-Rdzeń bazy obejmuje: `sources`, `events`, `candidate_terms`, `topics`, `topic_terms`, `event_candidate_terms`, `event_topics`, `entities`, `event_entities`, `event_relations` oraz `import_runs`. Rozszerzenie źródłowe obejmuje `chatgpt_conversations` i `chatgpt_messages`. Warstwa persystencji używa SQLAlchemy 2.x, a zmiany schematu są wersjonowane przez Alembic. Bazą pozostaje pojedynczy lokalny plik SQLite. Wyszukiwanie tekstu używa FTS5.
+Rdzeń bazy obejmuje: `sources`, `events`, `event_segments`, `candidate_terms`, `topics`, `topic_terms`, `event_candidate_terms`, `event_topics`, `entities`, `event_entities`, `event_relations` oraz `import_runs`. Rozszerzenie źródłowe obejmuje `chatgpt_conversations` i `chatgpt_messages`. Warstwa persystencji używa SQLAlchemy 2.x, a zmiany schematu są wersjonowane przez Alembic. Bazą pozostaje pojedynczy lokalny plik SQLite. Wyszukiwanie tekstu używa FTS5.
 
 ## Idempotencja
 
@@ -30,6 +31,8 @@ Rdzeń bazy obejmuje: `sources`, `events`, `candidate_terms`, `topics`, `topic_t
 Eksport pokazał, że `message_id` nie jest globalnie unikalne: ten sam identyfikator może wystąpić w różnych rozmowach. Wewnętrzny klucz wiadomości i jej zdarzenia jest więc deterministycznie wyprowadzany z pary `(conversation_id, message_id)`. Oryginalny identyfikator pozostaje zachowany jako pole źródłowe.
 
 SQLite FTS5 jest utrzymywany przez triggery powiązane z `events`. Tabele wirtualne i cieniujące FTS są celowo wyłączone z porównywania schematu Alembic.
+
+`Event.text` pozostaje pełną treścią źródłową. Regenerowalne `event_segments` zachowują kolejność prozy, kodu, komend, logów i innych fragmentów. Osobny FTS segmentów indeksuje treści użytkowo wyszukiwalne, natomiast analiza tematów pobiera wyłącznie segmenty z `analysis_enabled=true` i uwzględnia ich `topic_weight`. Kod techniczny pozostaje wyszukiwalny, ale nie zasila statystyk języka naturalnego.
 
 Publiczny kontrakt lokalnego backendu jest opisany modelami Pydantic. Wyszukiwanie FTS5 i wystąpienia tematu zwracają wyłącznie krótkie fragmenty oraz stabilne identyfikatory; ograniczony kontekst rozmowy jest pobierany osobno po wyborze zdarzenia. Graf i wyszukiwanie jawnie przyjmują `privacy_level`, domyślnie `private`.
 

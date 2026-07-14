@@ -28,6 +28,8 @@ export function TopicDetails({
         {error}
       </div>
     );
+  if (!detail && context)
+    return <div className="topic-detail"><ContextView context={context} /></div>;
   if (!detail)
     return <div className="detail-placeholder">Wybierz węzeł, aby zobaczyć jego historię.</div>;
 
@@ -77,7 +79,7 @@ export function TopicDetails({
           <div className="occurrences">
             {occurrences.items.map((item) => (
               <button key={item.event_id} type="button" onClick={() => onLoadContext(item.event_id)}>
-                <span className="occurrence-meta">{item.role ?? "zdarzenie"} · {formatDate(item.occurred_at)}</span>
+                <span className="occurrence-meta">{matchLabel(item.match_type)} · {item.role ?? "zdarzenie"} · {formatDate(item.occurred_at)}</span>
                 <strong>{item.conversation_title ?? "Bez tytułu"}</strong>
                 <span className="excerpt">{item.snippet || "Brak tekstu"}</span>
                 <code className="source-id" title={item.source_record_id}>{item.source_record_id}</code>
@@ -92,22 +94,41 @@ export function TopicDetails({
         )}
       </section>
 
-      {context && (
-        <section className="context-panel" aria-label="Ograniczony kontekst rozmowy">
-          <h3>{context.conversation_title ?? "Kontekst fragmentu"}</h3>
-          {context.messages.map((message) => (
-            <article key={message.event_id} className={message.is_target ? "target" : ""}>
-              <span>{message.role} · {formatDate(message.created_at)}</span>
-              <p>{message.text || "Brak tekstu"}</p>
-            </article>
-          ))}
-        </section>
-      )}
+      {context && <ContextView context={context} />}
     </div>
+  );
+}
+
+function ContextView({ context }: { context: MessageContext }) {
+  return (
+    <section className="context-panel" aria-label="Ograniczony kontekst rozmowy">
+      <h3>{context.conversation_title ?? "Kontekst fragmentu"}</h3>
+      {context.messages.map((message) => (
+        <article key={message.event_id} className={message.is_target ? "target" : ""}>
+          <span>{message.role} · {formatDate(message.created_at)}</span>
+          <p>{message.text || "Brak tekstu"}</p>
+        </article>
+      ))}
+    </section>
   );
 }
 
 function formatDate(value: string | null): string {
   if (!value) return "bez daty";
   return new Intl.DateTimeFormat("pl-PL", { year: "numeric", month: "short", day: "numeric" }).format(new Date(value));
+}
+
+function matchLabel(value: EventExcerptPage["items"][number]["match_type"]): string {
+  const labels = {
+    prose: "PROZA",
+    code: "KOD",
+    inline_code: "KOD INLINE",
+    shell_command: "KOMENDA",
+    log: "LOG",
+    quote: "CYTAT",
+    table: "TABELA",
+    link: "LINK",
+    unknown: "TREŚĆ",
+  } as const;
+  return value ? labels[value] : "FRAGMENT";
 }

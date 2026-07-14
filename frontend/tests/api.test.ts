@@ -20,3 +20,13 @@ test("API client reports backend failures", async () => {
   vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 503, statusText: "Offline" }));
   await expect(api.meta()).rejects.toThrow("API 503: Offline");
 });
+
+test("API client passes the segment content scope", async () => {
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response(JSON.stringify({ items: [], total: 0, limit: 12, offset: 0 }), { status: 200 }),
+  );
+  await api.searchEvents("synthetic function", "code");
+  const url = String(fetchMock.mock.calls[0][0]);
+  expect(url).toContain("/api/search/events?");
+  expect(url).toContain("content_scope=code");
+});

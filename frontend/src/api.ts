@@ -26,6 +26,15 @@ export const api = {
       `/api/topics/search?q=${encodeURIComponent(query)}&limit=12&privacy_level=private&layer=all`,
       signal,
     ),
+  searchEvents: (
+    query: string,
+    contentScope: "all" | "prose" | "code" | "commands" | "logs",
+    signal?: AbortSignal,
+  ) =>
+    request<EventExcerptPage>(
+      `/api/search/events?q=${encodeURIComponent(query)}&limit=12&offset=0&privacy_level=private&content_scope=${contentScope}`,
+      signal,
+    ),
   topic: (topicId: string, layer: GraphFilters["graphView"], signal?: AbortSignal) =>
     request<TopicDetail>(
       `/api/topics/${encodeURIComponent(topicId)}?privacy_level=private&layer=${layer}`,

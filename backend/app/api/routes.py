@@ -244,6 +244,7 @@ def event_search(
     privacy_level: PrivacyLevel = "private",
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
+    content_scope: Literal["all", "prose", "code", "commands", "logs"] = "all",
 ) -> PaginatedEventExcerptResponse:
     try:
         page = search_events(
@@ -255,6 +256,7 @@ def event_search(
             privacy_level=privacy_level,
             limit=limit,
             offset=offset,
+            content_scope=content_scope,
         )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error

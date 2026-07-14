@@ -62,7 +62,7 @@ Lokalne endpointy danych:
 - `GET /api/topics/{topic_id}` — statystyki, intensywność i relacje;
 - `GET /api/topics/{topic_id}/terms` — terminy i aliasy tworzące temat;
 - `GET /api/topics/{topic_id}/occurrences` — paginowane fragmenty źródłowe;
-- `GET /api/search/events` — lokalne wyszukiwanie FTS5;
+- `GET /api/search/events` — lokalne wyszukiwanie FTS5 segmentów; `content_scope=all|prose|code|commands|logs`, a wynik zawiera `match_type`;
 - `GET /api/topics/{topic_id}/intensity` — miesięczna intensywność;
 - `GET /api/messages/{event_id}/context` — ograniczony kontekst fragmentu.
 
@@ -77,6 +77,6 @@ python scripts/build_topic_graph.py
 
 Importer przyjmuje również rozpakowany katalog. Domyślna baza `data/mnemosyne.sqlite3` oraz całe `sources/` są ignorowane przez Git. Ponowny import aktualizuje istniejące rekordy i nie tworzy duplikatów.
 
-Budowa tematów działa całkowicie lokalnie i wypisuje wyłącznie liczniki — nie nazwy tematów ani treść wiadomości. Surowe kandydaty pozostają w bazie wraz z oceną jakości, natomiast domyślny graf pokazuje tylko aktywne tematy. Bezpieczny przykład ręcznych aliasów znajduje się w `sample_data/topic_overrides.example.yaml`; prawdziwe mapowania można zapisać w ignorowanym `data/local_topic_overrides.yaml`.
+Budowa analizy działa całkowicie lokalnie i wypisuje wyłącznie liczniki — nie nazwy tematów ani treść wiadomości. Wiadomości są najpierw dzielone na segmenty, dzięki czemu kod, komendy i logi pozostają wyszukiwalne, ale nie zasilają głównej analizy tematów. Surowe kandydaty pozostają w bazie wraz z oceną jakości; domyślny widok „Terminy” zachowuje eksplorację Visual MVP, a osobny widok „Tematy (beta)” pokazuje wyłącznie jednostki zgrupowane lub zatwierdzone. Bezpieczny przykład ręcznych aliasów znajduje się w `sample_data/topic_overrides.example.yaml`; prawdziwe mapowania można zapisać w ignorowanym `data/local_topic_overrides.yaml`.
 
 Szczegóły projektu znajdują się w [`docs/architecture.md`](docs/architecture.md), a zasady bezpieczeństwa w [`docs/privacy.md`](docs/privacy.md).

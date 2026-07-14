@@ -62,6 +62,7 @@ export interface EventExcerpt {
   conversation_title: string | null;
   snippet: string;
   source_record_id: string;
+  match_type: "prose" | "code" | "inline_code" | "shell_command" | "log" | "quote" | "table" | "link" | "unknown" | null;
 }
 
 export interface EventExcerptPage {
