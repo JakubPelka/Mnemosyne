@@ -776,3 +776,54 @@ Uruchomić odświeżony stos, ocenić dwuwęzłowy graf tematów beta i ewentual
 
 - wersjonowanie analizy: `6335ece`;
 - wydajność i walidacja lokalna: oczekuje na commit.
+
+## 2026-07-14 — Graf terminów i zbiorcza eksploracja zapytań
+
+### Wykonane zadania
+
+- dodano wersjonowane `candidate_term_relations` i całkowicie rozdzielono źródła danych obu warstw grafu;
+- zmieniono kolejność filtrowania grafu: próg relacji usuwa krawędzie, ale pozostawia wybrane najważniejsze węzły;
+- rozszerzono `/api/meta` o osobne liczniki terminów, tematów i ich relacji;
+- dodano `/api/search/explore` z dopasowaniem na granicach tokenów, FTS prozy, deduplikacją zdarzeń i kontekstów oraz paginacją bez duplikatów;
+- dodano wynik zbiorczy w UI, uruchamianie Enterem, opcjonalne zawężenie do rekordu oraz czyszczenie starego wyboru;
+- rozszerzono bezpieczną diagnostykę o oba grafy, aktywny przebieg, rekordy osierocone i nieaktywne;
+- przebudowano lokalne dane pochodne bez zmiany źródeł i zdarzeń.
+
+### Zmienione pliki
+
+- modele, migracja, usługi grafu, katalogu oraz kontrakty API w `backend/`;
+- diagnostyka i skrypty przebudowy w `scripts/`;
+- stan aplikacji, klient API, panel wyniku zbiorczego i testy w `frontend/`;
+- README, architektura, roadmapa i ADR 0010.
+
+### Testy i wyniki
+
+- backend: 47 testów zaliczonych; Ruff i kontrola formatowania zaliczone; Alembic bez dryfu po migracji;
+- frontend: 16 testów zaliczonych; TypeScript i produkcyjny build zaliczone do czystego katalogu tymczasowego;
+- lokalna przebudowa: 4742 aktywne terminy, 22143 relacje terminów, 2 tematy beta i 1 relacja tematów;
+- domyślny graf terminów: 30 węzłów, 7 relacji i 22 węzły izolowane; graf tematów: 2 węzły i 1 relacja;
+- obowiązkowy test `GIS`: aktywny termin, dopasowanie prozy i FTS, resolver HTTP 200 niezależny od wielkości liter;
+- zbiorcza walidacja lokalna: 610 unikalnych zdarzeń, 189 kontekstów i 0 duplikatów na stronie fragmentów;
+- `docker-compose config --quiet`: zaliczone; uruchomienie stosu zablokowane brakiem dostępu sesji do demona Docker.
+
+### Decyzje techniczne
+
+- wynik zbiorczy jest nietrwałym widokiem zapytania i nie tworzy `Topic`;
+- sąsiedzi agregatu są liczeni z przypisań aktywnego przebiegu w Pythonie po indeksowanym odczycie, co usunęło wielodziesięciosekundowy plan agregacji SQLite;
+- liczniki agregatu powstają ze zbiorów unikalnych `event_id` i `context_id`, nie z sum liczników wariantów.
+
+### Znane ograniczenia i otwarte kwestie
+
+- ręczna ocena wizualna obu widoków należy do właściciela i pozostaje warunkiem merge;
+- standardowy `frontend/dist` zawiera ignorowane artefakty należące do roota po wcześniejszym Dockerze; build zweryfikowano bezpiecznie poza tym katalogiem;
+- pełnego Compose nie uruchomiono ponownie, ponieważ bieżąca sesja nie ma dostępu do demona; plik Compose nie był zmieniany.
+
+### Następny krok
+
+Uruchomić odświeżony stos w środowisku właściciela, ręcznie ocenić graf terminów, graf tematów, `GIS` i wynik zbiorczy, a dopiero potem zdecydować o merge.
+
+### Commity
+
+- backend i dane grafu: `da7ddc1`;
+- interfejs zbiorczej eksploracji: `285122b`.
+- jawne źródło relacji tematów: `a233169`.

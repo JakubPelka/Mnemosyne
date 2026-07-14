@@ -139,6 +139,8 @@ Ta lista odzwierciedla aktualne wymagania produktu. Trwałe instrukcje znajdują
 - [x] Przetestować budowę i filtrowanie relacji.
 - [x] Liczyć relacje tematów z przypisań do wydarzeń i niezależnych kontekstów, nie z sąsiedztwa tokenów.
 - [x] Wymagać co najmniej dwóch niezależnych kontekstów dla relacji automatycznej.
+- [x] Rozdzielić zapisane relacje terminów od relacji właściwych tematów.
+- [x] Zachować najważniejsze węzły po odfiltrowaniu słabych krawędzi.
 
 ## 8. API
 
@@ -154,6 +156,8 @@ Ta lista odzwierciedla aktualne wymagania produktu. Trwałe instrukcje znajdują
 - [x] Udostępnić listę aktywnych tematów i przypisane im terminy.
 - [x] Dodać jawne warstwy `terms` i `topics`, z użyteczną eksploracją terminów jako widokiem domyślnym.
 - [x] Dodać zakres treści `all|prose|code|commands|logs` do wyszukiwania zdarzeń.
+- [x] Dodać zbiorczą eksplorację wariantów zapytania z deduplikacją wiadomości i kontekstów.
+- [x] Rozdzielić liczniki terminów/relacji terminów od tematów/relacji tematów w metadanych.
 
 ## 9. Webowy interfejs MVP
 
@@ -174,6 +178,8 @@ Ta lista odzwierciedla aktualne wymagania produktu. Trwałe instrukcje znajdują
 - [x] Pokazywać domyślnie maksymalnie 30 aktywnych terminów.
 - [x] Dodać przełącznik „Terminy / Tematy (beta)” bez sztucznego wypełniania warstwy tematów.
 - [x] Dodać wyszukiwanie treści z etykietami typu segmentu i ładowaniem kontekstu.
+- [x] Uruchamiać zbiorczą eksplorację klawiszem Enter i pozostawić konkretne rekordy jako zawężenie.
+- [x] Czyścić poprzedni wybór po zmianie zapytania lub warstwy grafu.
 
 ## 10. Kryteria ukończenia MVP
 

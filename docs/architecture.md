@@ -40,7 +40,9 @@ Każde zdarzenie ma neutralne `context_id`, `is_active` oraz `analysis_enabled`.
 
 Analiza najpierw zapisuje unigramy, bigramy i opcjonalne trigramy jako `CandidateTerm`. Deterministyczne reguły jakości zachowują odrzucone rekordy wraz z powodem, lecz wyłączają je z domyślnej eksploracji. Aktywne kandydaty tworzą domyślną warstwę „Terminy” z pełnymi statystykami i kontekstem.
 
-`Topic` jest osobną warstwą beta. Powstaje tylko z ręcznego mapowania, wielu wariantów, wartościowej frazy albo rozpoznanego akronimu; zaakceptowany singleton nie jest automatycznie promowany. `topic_terms` zachowuje pochodzenie, aliasy i ręczne mapowania, `event_candidate_terms` zasila eksplorację terminów, a `event_topics` graf tematów beta. Lokalne nadpisania mogą być przechowywane wyłącznie w ignorowanym `data/local_topic_overrides.yaml`.
+`Topic` jest osobną warstwą beta. Powstaje tylko z ręcznego mapowania, wielu wariantów, wartościowej frazy albo rozpoznanego akronimu; zaakceptowany singleton nie jest automatycznie promowany. `topic_terms` zachowuje pochodzenie, aliasy i ręczne mapowania, `event_candidate_terms` wraz z `candidate_term_relations` zasila niezależny graf terminów, a `event_topics` wraz z `topic_relations` graf tematów beta. Lokalne nadpisania mogą być przechowywane wyłącznie w ignorowanym `data/local_topic_overrides.yaml`.
+
+Zbiorcza eksploracja zapytania nie tworzy rekordu `Topic`. Łączy dokładne terminy, aliasy, frazy z granicami tokenów i FTS prozy, a następnie wylicza statystyki na zbiorze unikalnych `event_id` oraz neutralnych `context_id`. Konkretne rekordy pozostają opcjonalnym zawężeniem wyniku.
 
 Każda pełna przebudowa danych pochodnych ma własny `analysis_run`. Nowy komplet segmentów, terminów, tematów, aliasów, przypisań i relacji jest budowany transakcyjnie, a następnie atomowo oznaczany jako jedyny aktywny przebieg. API filtruje dane po tym przebiegu. Dla dużego korpusu wersja regułowa automatycznie promuje wyłącznie bardzo konserwatywne klasy; pozostałe pojęcia wymagają lokalnego override. Pusty graf tematów beta jest poprawnym wynikiem.
 

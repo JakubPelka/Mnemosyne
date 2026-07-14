@@ -55,7 +55,7 @@ Endpoint kontrolny: `http://127.0.0.1:8000/health`.
 
 Lokalne endpointy danych:
 
-- `GET /api/meta` — bezpieczne metadane zakresu i liczników;
+- `GET /api/meta` — bezpieczne metadane oraz osobne liczniki terminów i tematów;
 - `GET /api/graph` — graf z filtrami czasu, progów, źródła i sąsiadów;
 - `GET /api/topics` — paginowana lista aktywnych tematów;
 - `GET /api/topics/search` — wyszukiwanie tematów;
@@ -64,6 +64,7 @@ Lokalne endpointy danych:
 - `GET /api/topics/{topic_id}/occurrences` — paginowane fragmenty źródłowe;
 - `GET /api/search/events` — lokalne wyszukiwanie FTS5 segmentów; `content_scope=all|prose|code|commands|logs`, a wynik zawiera `match_type`;
 - `GET /api/search/resolve` — priorytetowe rozwiązywanie nazwy tematu, aliasu i dokładnego terminu;
+- `GET /api/search/explore` — zbiorcza, deduplikowana eksploracja wszystkich wariantów zapytania;
 - `GET /api/topics/{topic_id}/intensity` — miesięczna intensywność;
 - `GET /api/messages/{event_id}/context` — ograniczony kontekst fragmentu.
 
