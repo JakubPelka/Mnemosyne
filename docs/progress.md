@@ -679,3 +679,52 @@ Ocenić wizualnie jakość tematów beta, a po akceptacji zdecydować osobno o p
 
 - segmentacja: `4fb8e7b`;
 - końcowa walidacja i raport: commit zawierający niniejszy wpis.
+
+## 2026-07-14 — Wersjonowanie i pełna przebudowa analizy
+
+### Wykonane zadania
+
+- potwierdzono diagnostycznie 1171 historycznych rekordów `Topic` przy 200 pozycjach raportowanych przez ostatnią przebudowę;
+- dodano `analysis_runs`, identyfikator przebiegu we wszystkich warstwach pochodnych oraz osobne `topic_aliases`;
+- przebudowa tworzy nowy komplet danych w transakcji i aktywuje go dopiero po ukończeniu;
+- dodano bezpieczne narzędzia `diagnose_analysis.py` i `rebuild_analysis.py` z trybami `--dry-run` i `--fresh`;
+- dodano resolver wyszukiwania z kolejnością dokładna nazwa, alias, termin i prefiks;
+- ograniczono automatyczne tematy dużego korpusu; brak ręcznych overrides może prawidłowo dać pustą warstwę beta;
+- relacje są normalizowane według niezależnych kontekstów i wymagają co najmniej dwóch kontekstów, poza ręcznie zatwierdzonymi pojęciami.
+
+### Zmienione pliki
+
+- modele, migracje, usługi analizy, katalogu i grafu w `backend/`;
+- `scripts/diagnose_analysis.py`, `scripts/rebuild_analysis.py`;
+- testy backendu;
+- `README.md`, architektura, roadmapa i ADR 0009.
+
+### Testy i wyniki
+
+- backend: 44 testy zaliczone;
+- Ruff: zaliczony;
+- migracja właściwej bazy do nowych tabel: zaliczona bez zmiany źródeł i wydarzeń;
+- przebudowa kopii: dokładnie jeden aktywny ukończony przebieg, 0 rekordów pochodnych bez identyfikatora i 0 osieroconych relacji;
+- obowiązkowy termin użytkownika występuje w prozie, FTS i aktywnej warstwie terminów oraz jest rozwiązywany jako dokładny termin bez względu na wielkość liter;
+- test relacji syntetycznych potwierdza wspólne niezależne konteksty zamiast sąsiedztwa tokenów.
+
+### Decyzje techniczne
+
+- metadane starszych przebiegów pozostają, lecz materializowany jest wyłącznie jeden aktywny komplet dużych danych pochodnych;
+- konfiguracja przebiegu zawiera hash parametrów i lokalnych overrides, bez zapisywania ich treści w logach;
+- w dużym korpusie TF-IDF, stemming i zapis uppercase nie są wystarczającym dowodem utworzenia `Topic`.
+
+### Znane ograniczenia i otwarte kwestie
+
+- regułowa warstwa tematów beta będzie celowo bardzo mała lub pusta bez lokalnych mapowań;
+- pełna przebudowa kopii trwa około 56 s i osiąga około 1,57 GiB pamięci;
+- ręczna ocena sąsiadów wymaga najpierw zdefiniowania kilku lokalnych tematów w ignorowanym pliku overrides.
+
+### Następny krok
+
+Uruchomić konserwatywną przebudowę właściwej lokalnej bazy, sprawdzić API i frontend, a następnie poprosić właściciela o ręczną ocenę kilku tematów z lokalnych overrides.
+
+### Commity
+
+- baza bloku: `24ac70e`;
+- wersjonowanie i przebudowa: oczekuje na commit.

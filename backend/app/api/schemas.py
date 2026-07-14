@@ -83,6 +83,11 @@ class TopicSearchResponse(BaseModel):
     items: list[TopicSearchItemResponse]
 
 
+class SearchResolutionResponse(BaseModel):
+    match_kind: str
+    item: TopicSearchItemResponse
+
+
 class TopicTermResponse(BaseModel):
     term_id: str
     term: str

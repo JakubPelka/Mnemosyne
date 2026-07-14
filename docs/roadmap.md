@@ -119,6 +119,10 @@ Ta lista odzwierciedla aktualne wymagania produktu. Trwałe instrukcje znajdują
 - [x] Zachować wyszukiwanie kodu, komend i logów przez osobny FTS segmentów.
 - [x] Zwracać typ dopasowanego segmentu i zachować otwieranie kontekstu wiadomości.
 - [x] Zweryfikować idempotentną segmentację oraz migrację istniejącej bazy.
+- [x] Dodać wersjonowane `analysis_runs` i przypisać do nich wszystkie dane pochodne.
+- [x] Dodać atomową aktywację ukończonego przebiegu oraz rollback przy błędzie.
+- [x] Dodać bezpieczne `diagnose_analysis.py` i pełną przebudowę `rebuild_analysis.py`.
+- [x] Dodać osobne aliasy tematów i priorytetowy resolver nazwa–alias–termin.
 
 ## 7. Graf relacji tematów
 
@@ -133,6 +137,8 @@ Ta lista odzwierciedla aktualne wymagania produktu. Trwałe instrukcje znajdują
 - [x] Pokazywać najbliższych sąsiadów wybranego węzła.
 - [x] Umożliwić ukrycie słabych połączeń.
 - [x] Przetestować budowę i filtrowanie relacji.
+- [x] Liczyć relacje tematów z przypisań do wydarzeń i niezależnych kontekstów, nie z sąsiedztwa tokenów.
+- [x] Wymagać co najmniej dwóch niezależnych kontekstów dla relacji automatycznej.
 
 ## 8. API
 

@@ -17,6 +17,7 @@ from backend.app.models import (
     EventTopic,
     Source,
     Topic,
+    TopicAlias,
     TopicRelation,
     TopicTerm,
 )
@@ -25,6 +26,7 @@ from backend.app.services.topics import (
     term_monthly_intensity,
     topic_monthly_intensity,
 )
+from backend.app.services.analysis_runs import active_analysis_run_subquery
 
 _SNIPPET_LENGTH = 280
 _SEARCH_TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
@@ -105,6 +107,12 @@ class EventExcerptPage:
     offset: int
 
 
+@dataclass(frozen=True, slots=True)
+class SearchResolution:
+    match_kind: str
+    item: TopicSummary
+
+
 def get_catalog_meta(session: Session) -> CatalogMeta:
     active = Event.is_active.is_(True)
     earliest, latest, event_count = session.execute(
@@ -121,19 +129,31 @@ def get_catalog_meta(session: Session) -> CatalogMeta:
         .order_by(Source.source_type)
     ).all()
     categories = session.scalars(
-        select(distinct(Topic.category)).where(Topic.is_active.is_(True)).order_by(Topic.category)
+        select(distinct(Topic.category))
+        .where(
+            Topic.is_active.is_(True),
+            Topic.analysis_run_id == active_analysis_run_subquery(),
+        )
+        .order_by(Topic.category)
     ).all()
     topic_count = session.scalar(
         select(func.count(distinct(EventTopic.topic_id)))
         .join(Event, Event.event_id == EventTopic.event_id)
         .join(Topic, Topic.topic_id == EventTopic.topic_id)
-        .where(active, Topic.is_active.is_(True))
+        .where(
+            active,
+            Topic.is_active.is_(True),
+            Topic.analysis_run_id == active_analysis_run_subquery(),
+        )
     )
     relation_count = session.scalar(
         select(func.count())
         .select_from(TopicRelation)
         .join(Topic, Topic.topic_id == TopicRelation.source_topic_id)
-        .where(Topic.is_active.is_(True))
+        .where(
+            Topic.is_active.is_(True),
+            Topic.analysis_run_id == active_analysis_run_subquery(),
+        )
     )
     return CatalogMeta(
         earliest_event_at=earliest,
@@ -169,12 +189,15 @@ def search_topics(
         .join(Event, Event.event_id == EventTopic.event_id)
         .outerjoin(TopicTerm, TopicTerm.topic_id == Topic.topic_id)
         .outerjoin(CandidateTerm, CandidateTerm.term_id == TopicTerm.term_id)
+        .outerjoin(TopicAlias, TopicAlias.topic_id == Topic.topic_id)
         .where(
             Event.is_active.is_(True),
             Event.privacy_level == privacy_level,
             Topic.is_active.is_(True),
+            Topic.analysis_run_id == active_analysis_run_subquery(),
             or_(
                 Topic.name.ilike(pattern, escape="\\"),
+                TopicAlias.normalized_alias.ilike(pattern, escape="\\"),
                 CandidateTerm.normalized_term.ilike(pattern, escape="\\"),
             ),
         )
@@ -208,6 +231,7 @@ def search_terms(
         .join(Event, Event.event_id == EventCandidateTerm.event_id)
         .where(
             CandidateTerm.is_active.is_(True),
+            CandidateTerm.analysis_run_id == active_analysis_run_subquery(),
             Event.is_active.is_(True),
             Event.privacy_level == privacy_level,
             CandidateTerm.normalized_term.ilike(pattern, escape="\\"),
@@ -247,6 +271,48 @@ def search_catalog(
         values.extend(search_terms(session, query, limit=limit, privacy_level=privacy_level))
     values.sort(key=lambda item: (-item.message_count, item.layer, item.name))
     return tuple(values[:limit])
+
+
+def resolve_search_query(
+    session: Session,
+    query: str,
+    *,
+    privacy_level: str = "private",
+) -> SearchResolution | None:
+    """Resolve exact concepts before aliases, terms and prefix matches."""
+
+    normalized = query.strip().casefold()
+    if not normalized:
+        return None
+    topics = search_topics(session, query, limit=100, privacy_level=privacy_level)
+    terms = search_terms(session, query, limit=100, privacy_level=privacy_level)
+    exact_topic = next((item for item in topics if item.name.casefold() == normalized), None)
+    if exact_topic:
+        return SearchResolution("exact_topic", exact_topic)
+    alias_topic_id = session.scalar(
+        select(TopicAlias.topic_id)
+        .join(Topic, Topic.topic_id == TopicAlias.topic_id)
+        .where(
+            TopicAlias.normalized_alias == normalized,
+            Topic.is_active.is_(True),
+            Topic.analysis_run_id == active_analysis_run_subquery(),
+        )
+        .limit(1)
+    )
+    exact_alias = next((item for item in topics if item.topic_id == alias_topic_id), None)
+    if exact_alias is None and alias_topic_id is not None:
+        detail = get_topic_detail(session, alias_topic_id, privacy_level=privacy_level)
+        exact_alias = detail.summary if detail else None
+    if exact_alias:
+        return SearchResolution("exact_alias", exact_alias)
+    exact_term = next((item for item in terms if item.name.casefold() == normalized), None)
+    if exact_term:
+        return SearchResolution("exact_term", exact_term)
+    if topics:
+        return SearchResolution("prefix_topic_or_alias", topics[0])
+    if terms:
+        return SearchResolution("prefix_term", terms[0])
+    return None
 
 
 def get_term_detail(
@@ -595,6 +661,7 @@ def _topic_neighbors(
             Event.is_active.is_(True),
             Event.privacy_level == privacy_level,
             Topic.is_active.is_(True),
+            Topic.analysis_run_id == active_analysis_run_subquery(),
         )
     )
     metadata: dict[str, tuple[str, str]] = {}
@@ -664,6 +731,7 @@ def _term_neighbors(
             EventCandidateTerm.event_id.in_(target_events),
             EventCandidateTerm.term_id != term_id,
             CandidateTerm.is_active.is_(True),
+            CandidateTerm.analysis_run_id == active_analysis_run_subquery(),
             Event.is_active.is_(True),
             Event.privacy_level == privacy_level,
         )

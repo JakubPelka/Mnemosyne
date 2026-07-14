@@ -8,6 +8,7 @@ from sqlalchemy import func, select, text
 
 from backend.app.database import create_sqlite_engine, session_factory, sqlite_url
 from backend.app.models import (
+    AnalysisRun,
     CandidateTerm,
     ChatGPTConversationModel,
     ChatGPTMessageModel,
@@ -16,13 +17,15 @@ from backend.app.models import (
     ImportRun,
     Source,
     Topic,
+    TopicAlias,
+    TopicRelation,
     EventTopic,
     TopicTerm,
 )
 from backend.app.services.context import get_message_context
 from backend.app.services.graph import get_topic_graph
 from backend.app.services.import_chatgpt import import_chatgpt_export
-from backend.app.services.catalog import search_catalog
+from backend.app.services.catalog import resolve_search_query, search_catalog
 from backend.app.services.topics import build_topics, topic_monthly_intensity
 
 FIXTURE_DIR = Path(__file__).parents[2] / "sample_data"
@@ -110,6 +113,8 @@ def test_migration_creates_shared_schema_and_fts(tmp_path: Path) -> None:
         "topic_terms",
         "event_segments",
         "event_segments_fts",
+        "analysis_runs",
+        "topic_aliases",
     } <= tables
 
 
@@ -265,7 +270,7 @@ def test_builds_local_topics_relations_and_monthly_intensity(tmp_path: Path) -> 
     assert result.rejected_terms > 0
     assert result.topics > 0
     assert result.assignments > 0
-    assert result.relations > 0
+    assert result.relations == 0
 
     with make_session() as session:
         garden = session.scalar(
@@ -314,6 +319,20 @@ def test_builds_local_topics_relations_and_monthly_intensity(tmp_path: Path) -> 
     with make_session() as session:
         second = build_topics(session, min_document_frequency=1, max_topics=100, topics_per_event=5)
     assert second == result
+    with make_session() as session:
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(AnalysisRun)
+                .where(AnalysisRun.is_active.is_(True), AnalysisRun.status == "completed")
+            )
+            == 1
+        )
+        active_run_id = session.scalar(
+            select(AnalysisRun.analysis_run_id).where(AnalysisRun.is_active.is_(True))
+        )
+        assert active_run_id is not None
+        assert set(session.scalars(select(Topic.analysis_run_id))) == {active_run_id}
 
 
 def test_applies_manual_topic_override_and_aliases(tmp_path: Path) -> None:
@@ -348,12 +367,21 @@ topics:
         manual = session.scalar(select(Topic).where(Topic.name == "Synthetic Garden Concept"))
         assert manual is not None
         assert manual.origin == "manual"
+        assert manual.creation_method == "override"
         assert manual.category == "synthetic"
         assert (
             session.scalar(
                 select(func.count())
                 .select_from(TopicTerm)
                 .where(TopicTerm.topic_id == manual.topic_id)
+            )
+            == 2
+        )
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(TopicAlias)
+                .where(TopicAlias.topic_id == manual.topic_id)
             )
             == 2
         )
@@ -392,6 +420,7 @@ topics:
     with make_session() as session:
         lower = search_catalog(session, "gis", layer="all")
         upper = search_catalog(session, "GIS", layer="all")
+        mixed = resolve_search_query(session, "Gis")
         automatic_topics = session.scalars(
             select(Topic).where(Topic.is_active.is_(True), Topic.origin == "automatic")
         ).all()
@@ -418,6 +447,8 @@ topics:
         )
 
     assert lower and upper
+    assert mixed is not None
+    assert mixed.match_kind in {"exact_topic", "exact_alias"}
     assert {item.name for item in lower} == {item.name for item in upper}
     assert any(item.layer == "terms" for item in lower)
     assert any(item.layer == "topics" for item in lower)
@@ -496,7 +527,7 @@ def test_filters_and_limits_topic_graph(tmp_path: Path) -> None:
             node_limit=3,
         )
 
-    assert len(graph.nodes) == 3
+    assert len(graph.nodes) == 1
     assert all(node.first_seen_at.month == 3 for node in graph.nodes if node.first_seen_at)
     assert all(edge.message_count >= 1 for edge in graph.edges)
 
@@ -510,7 +541,55 @@ def test_filters_and_limits_topic_graph(tmp_path: Path) -> None:
             neighbors_only=True,
         )
     assert selected in {node.topic_id for node in neighbors.nodes}
-    assert any(selected in {edge.source_topic_id, edge.target_topic_id} for edge in neighbors.edges)
+    assert neighbors.edges == ()
+
+
+def test_topic_relations_require_independent_contexts(tmp_path: Path) -> None:
+    database_path = _migrated_database(tmp_path)
+    engine = create_sqlite_engine(database_path)
+    make_session = session_factory(engine)
+    _insert_analysis_events(
+        make_session,
+        [
+            "Synthetic maps spatial portal",
+            "Synthetic maps spatial portal",
+            "Synthetic maps spatial portal",
+        ],
+    )
+    override_path = tmp_path / "relations.yaml"
+    override_path.write_text(
+        """
+topics:
+  - id: example_maps
+    name: Example Maps
+    aliases: [synthetic maps]
+    category: example
+  - id: example_portal
+    name: Example Portal
+    aliases: [spatial portal]
+    category: example
+""".strip(),
+        encoding="utf-8",
+    )
+    with make_session() as session:
+        result = build_topics(
+            session,
+            min_document_frequency=1,
+            overrides_path=override_path,
+        )
+    with make_session() as session:
+        maps_id = session.scalar(select(Topic.topic_id).where(Topic.name == "Example Maps"))
+        portal_id = session.scalar(select(Topic.topic_id).where(Topic.name == "Example Portal"))
+        relation = session.scalar(
+            select(TopicRelation).where(
+                TopicRelation.source_topic_id.in_((maps_id, portal_id)),
+                TopicRelation.target_topic_id.in_((maps_id, portal_id)),
+            )
+        )
+    assert result.relations >= 1
+    assert relation is not None
+    assert relation.conversation_count == 3
+    assert relation.weight == 1.0
 
 
 def test_loads_limited_context_on_the_active_branch(tmp_path: Path) -> None:

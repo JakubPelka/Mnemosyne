@@ -10,6 +10,7 @@ from sqlalchemy import distinct, func, select
 from sqlalchemy.orm import Session
 
 from backend.app.models import CandidateTerm, Event, EventCandidateTerm, EventTopic, Source, Topic
+from backend.app.services.analysis_runs import active_analysis_run_subquery
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +75,7 @@ def get_topic_graph(
             Event.is_active.is_(True),
             Event.privacy_level == privacy_level,
             Topic.is_active.is_(True),
+            Topic.analysis_run_id == active_analysis_run_subquery(),
         )
     )
     if start is not None:
@@ -119,8 +121,11 @@ def get_topic_graph(
 
     edges = []
     for (source_id, target_id), message_count in sorted(pair_messages.items()):
-        denominator = math.sqrt(len(topic_events[source_id]) * len(topic_events[target_id]))
-        weight = message_count / denominator if denominator else 0.0
+        shared_context_count = len(pair_contexts[(source_id, target_id)])
+        if shared_context_count < 2:
+            continue
+        denominator = math.sqrt(len(topic_contexts[source_id]) * len(topic_contexts[target_id]))
+        weight = shared_context_count / denominator if denominator else 0.0
         if message_count < min_edge_messages or weight < min_relation_weight:
             continue
         edges.append(
@@ -128,7 +133,7 @@ def get_topic_graph(
                 source_topic_id=source_id,
                 target_topic_id=target_id,
                 message_count=message_count,
-                context_count=len(pair_contexts[(source_id, target_id)]),
+                context_count=shared_context_count,
                 weight=weight,
             )
         )
@@ -185,6 +190,7 @@ def get_candidate_term_graph(
     filters = [Event.is_active.is_(True), Event.privacy_level == privacy_level]
     if not include_rejected:
         filters.append(CandidateTerm.is_active.is_(True))
+    filters.append(CandidateTerm.analysis_run_id == active_analysis_run_subquery())
     if start is not None:
         filters.append(Event.timestamp_start >= start)
     if end is not None:

@@ -71,6 +71,7 @@ def segment_text(value: str) -> tuple[ParsedSegment, ...]:
 def rebuild_event_segments(
     session: Session,
     *,
+    analysis_run_id: str | None = None,
     event_ids: set[str] | None = None,
 ) -> int:
     statement = select(Event.event_id, Event.text).where(
@@ -92,6 +93,7 @@ def rebuild_event_segments(
             session.add(
                 EventSegment(
                     segment_id=_segment_id(event_id, index, segment),
+                    analysis_run_id=analysis_run_id,
                     event_id=event_id,
                     segment_index=index,
                     segment_type=segment.segment_type,

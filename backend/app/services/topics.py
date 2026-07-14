@@ -10,7 +10,7 @@ from datetime import datetime
 from itertools import combinations
 from pathlib import Path
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
@@ -21,8 +21,14 @@ from backend.app.models import (
     EventSegment,
     EventTopic,
     Topic,
+    TopicAlias,
     TopicRelation,
     TopicTerm,
+)
+from backend.app.services.analysis_runs import (
+    activate_analysis_run,
+    active_analysis_run_subquery,
+    start_analysis_run,
 )
 from backend.app.nlp.lexicons import ALL_STOPWORDS
 from backend.app.nlp.quality import (
@@ -84,6 +90,7 @@ class _TopicDefinition:
     name: str
     category: str
     origin: str
+    creation_method: str
     primary_term: str
     aliases: tuple[str, ...]
 
@@ -113,7 +120,19 @@ def build_topics(
     ):
         raise ValueError("topic_build_limits_must_be_positive")
 
-    rebuild_event_segments(session)
+    overrides = load_topic_overrides(overrides_path)
+    configuration = {
+        "min_document_frequency": min_document_frequency,
+        "max_candidate_terms": max_candidate_terms,
+        "max_topics": max_topics,
+        "topics_per_event": topics_per_event,
+        "candidate_terms_per_event": candidate_terms_per_event,
+        "include_trigrams": include_trigrams,
+        "overrides_hash": hashlib.sha256(repr(overrides).encode()).hexdigest(),
+    }
+    run = start_analysis_run(session, configuration)
+    _clear_derived_analysis(session)
+    rebuild_event_segments(session, analysis_run_id=run.analysis_run_id)
     documents = _load_documents(session, include_trigrams=include_trigrams)
     document_frequency: Counter[str] = Counter()
     term_contexts: dict[str, set[str]] = defaultdict(set)
@@ -127,7 +146,6 @@ def build_topics(
         acronym_document_frequency.update(document.acronyms)
     observed_acronyms = set(acronym_document_frequency)
 
-    overrides = load_topic_overrides(overrides_path)
     manual_aliases = {alias for override in overrides for alias in override.aliases}
     ranked_terms = sorted(
         document_frequency,
@@ -153,24 +171,33 @@ def build_topics(
         manual_aliases=manual_aliases,
         acronym_document_frequency=acronym_document_frequency,
     )
-    _persist_candidates(session, metrics)
+    _persist_candidates(session, metrics, analysis_run_id=run.analysis_run_id)
     candidate_assignments = _candidate_assignments(
         documents,
         metrics,
         candidate_terms_per_event=candidate_terms_per_event,
     )
-    session.execute(delete(EventCandidateTerm))
     if candidate_assignments:
-        session.execute(insert(EventCandidateTerm), candidate_assignments)
+        session.execute(
+            insert(EventCandidateTerm),
+            [{**row, "analysis_run_id": run.analysis_run_id} for row in candidate_assignments],
+        )
 
-    definitions = _build_topic_definitions(metrics, overrides=overrides, max_topics=max_topics)
+    definitions = _build_topic_definitions(
+        metrics,
+        overrides=overrides,
+        max_topics=max_topics,
+        document_count=document_count,
+    )
     result = _persist_topic_layer(
         session,
         documents=documents,
         metrics=metrics,
         definitions=definitions,
         topics_per_event=topics_per_event,
+        analysis_run_id=run.analysis_run_id,
     )
+    activate_analysis_run(session, run)
     session.commit()
     rejection_counts = Counter(
         metric.quality.rejection_reason
@@ -205,6 +232,7 @@ def topic_monthly_intensity(
         .join(EventTopic, EventTopic.event_id == Event.event_id)
         .where(
             EventTopic.topic_id == topic_id,
+            EventTopic.analysis_run_id == active_analysis_run_subquery(),
             Event.is_active.is_(True),
             Event.privacy_level == privacy_level,
             Event.timestamp_start.is_not(None),
@@ -233,6 +261,7 @@ def term_monthly_intensity(
         .join(EventCandidateTerm, EventCandidateTerm.event_id == Event.event_id)
         .where(
             EventCandidateTerm.term_id == term_id,
+            EventCandidateTerm.analysis_run_id == active_analysis_run_subquery(),
             Event.is_active.is_(True),
             Event.privacy_level == privacy_level,
             Event.timestamp_start.is_not(None),
@@ -337,7 +366,7 @@ def _candidate_metrics(
                 document_count < 50
                 or (frequency / max(1, document_count) <= 0.05 and tfidf_score >= 3.5)
             )
-            and acronym_document_frequency[term] / max(1, frequency) >= 0.8
+            and acronym_document_frequency[term] >= min_document_frequency
         )
         quality = assess_term(
             term,
@@ -368,11 +397,13 @@ def _candidate_metrics(
     return result
 
 
-def _persist_candidates(session: Session, metrics: dict[str, _CandidateMetrics]) -> None:
-    session.execute(update(CandidateTerm).values(is_active=False))
+def _persist_candidates(
+    session: Session, metrics: dict[str, _CandidateMetrics], *, analysis_run_id: str
+) -> None:
     rows = [
         {
             "term_id": stable_term_id(term),
+            "analysis_run_id": analysis_run_id,
             "term": metric.term,
             "normalized_term": metric.quality.normalized_term,
             "ngram_size": metric.quality.ngram_size,
@@ -390,29 +421,7 @@ def _persist_candidates(session: Session, metrics: dict[str, _CandidateMetrics])
     ]
     if not rows:
         return
-    statement = insert(CandidateTerm).values(rows)
-    session.execute(
-        statement.on_conflict_do_update(
-            index_elements=[CandidateTerm.term_id],
-            set_={
-                column: getattr(statement.excluded, column)
-                for column in (
-                    "term",
-                    "normalized_term",
-                    "ngram_size",
-                    "language",
-                    "message_count",
-                    "context_count",
-                    "document_frequency",
-                    "tfidf_score",
-                    "quality_score",
-                    "quality_status",
-                    "rejection_reason",
-                    "is_active",
-                )
-            },
-        )
-    )
+    session.execute(insert(CandidateTerm), rows)
 
 
 def _candidate_assignments(
@@ -454,6 +463,7 @@ def _build_topic_definitions(
     *,
     overrides: tuple[TopicOverride, ...],
     max_topics: int,
+    document_count: int,
 ) -> tuple[_TopicDefinition, ...]:
     definitions: list[_TopicDefinition] = []
     manually_mapped: set[str] = set()
@@ -465,6 +475,7 @@ def _build_topic_definitions(
                 name=override.name,
                 category=override.category,
                 origin="manual",
+                creation_method="override",
                 primary_term=override.aliases[0],
                 aliases=override.aliases,
             )
@@ -520,17 +531,29 @@ def _build_topic_definitions(
         primary = ranked[0]
         aliases = tuple(dict.fromkeys([*ranked, *sorted(phrase_aliases.get(primary, set()))]))
         primary_metric = accepted[primary]
-        qualifies = len(terms) >= 2 or (
-            primary_metric.quality.ngram_size >= 2 and bool(phrase_aliases.get(primary))
+        is_phrase = (
+            document_count < 50
+            and primary_metric.quality.ngram_size >= 2
+            and not any(token in ALL_STOPWORDS for token in term_tokens(primary))
+            and primary_metric.document_frequency >= (1 if document_count < 10 else 8)
+            and primary_metric.context_count >= (1 if document_count < 10 else 8)
         )
+        promotes_acronym = document_count < 50 and primary_metric.is_acronym
+        qualifies = promotes_acronym or is_phrase
         if not qualifies:
             continue
+        creation_method = (
+            "alias_group"
+            if promotes_acronym or len(terms) >= 2
+            else "high_confidence_phrase"
+        )
         definitions.append(
             _TopicDefinition(
                 topic_id=stable_topic_id(canonical),
                 name=primary,
                 category="topic",
                 origin="automatic",
+                creation_method=creation_method,
                 primary_term=primary,
                 aliases=aliases,
             )
@@ -547,12 +570,8 @@ def _persist_topic_layer(
     metrics: dict[str, _CandidateMetrics],
     definitions: tuple[_TopicDefinition, ...],
     topics_per_event: int,
+    analysis_run_id: str,
 ) -> tuple[int, int, int, int]:
-    session.execute(delete(TopicRelation))
-    session.execute(delete(EventTopic))
-    session.execute(delete(TopicTerm))
-    session.execute(update(Topic).values(status="archived", is_active=False))
-
     term_to_topics: dict[str, list[str]] = defaultdict(list)
     topic_terms = []
     for definition in definitions:
@@ -564,6 +583,7 @@ def _persist_topic_layer(
                 {
                     "topic_id": definition.topic_id,
                     "term_id": stable_term_id(alias),
+                    "analysis_run_id": analysis_run_id,
                     "relation_type": (
                         "manual"
                         if definition.origin == "manual"
@@ -617,10 +637,12 @@ def _persist_topic_layer(
     topic_rows = [
         {
             "topic_id": definition.topic_id,
+            "analysis_run_id": analysis_run_id,
             "name": definition.name,
             "category": definition.category,
             "status": "active",
             "origin": definition.origin,
+            "creation_method": definition.creation_method,
             "is_active": True,
             "message_count": topic_events[definition.topic_id],
             "conversation_count": len(topic_contexts[definition.topic_id]),
@@ -634,30 +656,29 @@ def _persist_topic_layer(
     topic_terms = [row for row in topic_terms if row["topic_id"] in active_topic_ids]
     event_topic_rows = [row for row in event_topic_rows if row["topic_id"] in active_topic_ids]
     if topic_rows:
-        statement = insert(Topic).values(topic_rows)
-        session.execute(
-            statement.on_conflict_do_update(
-                index_elements=[Topic.topic_id],
-                set_={
-                    column: getattr(statement.excluded, column)
-                    for column in (
-                        "name",
-                        "category",
-                        "status",
-                        "origin",
-                        "is_active",
-                        "message_count",
-                        "conversation_count",
-                        "first_seen_at",
-                        "last_seen_at",
-                    )
-                },
-            )
-        )
+        session.execute(insert(Topic), topic_rows)
     if topic_terms:
         session.execute(insert(TopicTerm), topic_terms)
     if event_topic_rows:
-        session.execute(insert(EventTopic), event_topic_rows)
+        session.execute(
+            insert(EventTopic),
+            [{**row, "analysis_run_id": analysis_run_id} for row in event_topic_rows],
+        )
+    alias_rows = [
+        {
+            "topic_alias_id": _topic_alias_id(definition.topic_id, alias),
+            "analysis_run_id": analysis_run_id,
+            "topic_id": definition.topic_id,
+            "normalized_alias": normalize_term(alias),
+            "display_alias": alias,
+            "alias_type": "manual" if definition.origin == "manual" else "term",
+        }
+        for definition in definitions
+        if definition.topic_id in active_topic_ids
+        for alias in definition.aliases
+    ]
+    if alias_rows:
+        session.execute(insert(TopicAlias), alias_rows)
 
     message_pairs: Counter[tuple[str, str]] = Counter()
     pair_contexts: dict[tuple[str, str], set[str]] = defaultdict(set)
@@ -667,16 +688,25 @@ def _persist_topic_layer(
             message_pairs[pair] += 1
             pair_contexts[pair].add(document.context_id)
     relation_rows = []
+    topic_methods = {definition.topic_id: definition.creation_method for definition in definitions}
     for (source_id, target_id), message_count in sorted(message_pairs.items()):
-        denominator = math.sqrt(topic_events[source_id] * topic_events[target_id])
+        shared_context_count = len(pair_contexts[(source_id, target_id)])
+        manually_approved = "override" in {
+            topic_methods.get(source_id),
+            topic_methods.get(target_id),
+        }
+        if shared_context_count < 2 and not manually_approved:
+            continue
+        denominator = math.sqrt(len(topic_contexts[source_id]) * len(topic_contexts[target_id]))
         relation_rows.append(
             {
                 "relation_id": _relation_id(source_id, target_id),
+                "analysis_run_id": analysis_run_id,
                 "source_topic_id": source_id,
                 "target_topic_id": target_id,
                 "message_count": message_count,
-                "conversation_count": len(pair_contexts[(source_id, target_id)]),
-                "weight": message_count / denominator if denominator else 0.0,
+                "conversation_count": shared_context_count,
+                "weight": shared_context_count / denominator if denominator else 0.0,
             }
         )
     if relation_rows:
@@ -707,3 +737,19 @@ def _simple_stem(token: str) -> str:
 def _relation_id(source_topic_id: str, target_topic_id: str) -> str:
     value = f"{source_topic_id}:{target_topic_id}"
     return f"topic-relation-{hashlib.sha256(value.encode()).hexdigest()}"
+
+
+def _topic_alias_id(topic_id: str, alias: str) -> str:
+    value = f"{topic_id}:{normalize_term(alias)}"
+    return f"topic-alias-{hashlib.sha256(value.encode()).hexdigest()}"
+
+
+def _clear_derived_analysis(session: Session) -> None:
+    session.execute(delete(TopicRelation))
+    session.execute(delete(EventTopic))
+    session.execute(delete(TopicAlias))
+    session.execute(delete(TopicTerm))
+    session.execute(delete(EventCandidateTerm))
+    session.execute(delete(Topic))
+    session.execute(delete(CandidateTerm))
+    session.execute(delete(EventSegment))

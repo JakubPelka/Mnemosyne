@@ -16,6 +16,7 @@ from backend.app.api.schemas import (
     MetaResponse,
     MonthlyIntensityResponse,
     PaginatedEventExcerptResponse,
+    SearchResolutionResponse,
     TopicDetailResponse,
     TopicIntensityResponse,
     TopicNeighborResponse,
@@ -36,6 +37,7 @@ from backend.app.services.catalog import (
     search_events,
     search_catalog,
     search_topics,
+    resolve_search_query,
 )
 from backend.app.services.context import get_message_context
 from backend.app.services.graph import get_candidate_term_graph, get_topic_graph
@@ -129,6 +131,21 @@ def topic_search(
                 session, q, layer=layer, limit=limit, privacy_level=privacy_level
             )
         ]
+    )
+
+
+@router.get("/search/resolve", response_model=SearchResolutionResponse)
+def resolve_search(
+    session: DatabaseSession,
+    q: Annotated[str, Query(min_length=1, max_length=200)],
+    privacy_level: PrivacyLevel = "private",
+) -> SearchResolutionResponse:
+    result = resolve_search_query(session, q, privacy_level=privacy_level)
+    if result is None:
+        raise HTTPException(status_code=404, detail="search_query_not_found")
+    return SearchResolutionResponse(
+        match_kind=result.match_kind,
+        item=TopicSearchItemResponse(**asdict(result.item)),
     )
 
 

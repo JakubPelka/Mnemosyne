@@ -22,7 +22,7 @@ Format ChatGPT nie jest modelem domenowym aplikacji. `ChatGPTExportAdapter` będ
 - `backend/app/api`: filtrowanie po czasie, źródle i poziomie prywatności;
 - `frontend`: graf, oś czasu i kontekst fragmentu.
 
-Rdzeń bazy obejmuje: `sources`, `events`, `event_segments`, `candidate_terms`, `topics`, `topic_terms`, `event_candidate_terms`, `event_topics`, `entities`, `event_entities`, `event_relations` oraz `import_runs`. Rozszerzenie źródłowe obejmuje `chatgpt_conversations` i `chatgpt_messages`. Warstwa persystencji używa SQLAlchemy 2.x, a zmiany schematu są wersjonowane przez Alembic. Bazą pozostaje pojedynczy lokalny plik SQLite. Wyszukiwanie tekstu używa FTS5.
+Rdzeń bazy obejmuje: `sources`, `events`, `analysis_runs`, `event_segments`, `candidate_terms`, `topics`, `topic_aliases`, `topic_terms`, `event_candidate_terms`, `event_topics`, `entities`, `event_entities`, `event_relations` oraz `import_runs`. Rozszerzenie źródłowe obejmuje `chatgpt_conversations` i `chatgpt_messages`. Warstwa persystencji używa SQLAlchemy 2.x, a zmiany schematu są wersjonowane przez Alembic. Bazą pozostaje pojedynczy lokalny plik SQLite. Wyszukiwanie tekstu używa FTS5.
 
 ## Idempotencja
 
@@ -41,6 +41,8 @@ Każde zdarzenie ma neutralne `context_id`, `is_active` oraz `analysis_enabled`.
 Analiza najpierw zapisuje unigramy, bigramy i opcjonalne trigramy jako `CandidateTerm`. Deterministyczne reguły jakości zachowują odrzucone rekordy wraz z powodem, lecz wyłączają je z domyślnej eksploracji. Aktywne kandydaty tworzą domyślną warstwę „Terminy” z pełnymi statystykami i kontekstem.
 
 `Topic` jest osobną warstwą beta. Powstaje tylko z ręcznego mapowania, wielu wariantów, wartościowej frazy albo rozpoznanego akronimu; zaakceptowany singleton nie jest automatycznie promowany. `topic_terms` zachowuje pochodzenie, aliasy i ręczne mapowania, `event_candidate_terms` zasila eksplorację terminów, a `event_topics` graf tematów beta. Lokalne nadpisania mogą być przechowywane wyłącznie w ignorowanym `data/local_topic_overrides.yaml`.
+
+Każda pełna przebudowa danych pochodnych ma własny `analysis_run`. Nowy komplet segmentów, terminów, tematów, aliasów, przypisań i relacji jest budowany transakcyjnie, a następnie atomowo oznaczany jako jedyny aktywny przebieg. API filtruje dane po tym przebiegu. Dla dużego korpusu wersja regułowa automatycznie promuje wyłącznie bardzo konserwatywne klasy; pozostałe pojęcia wymagają lokalnego override. Pusty graf tematów beta jest poprawnym wynikiem.
 
 ## Decyzje odłożone do inspekcji
 

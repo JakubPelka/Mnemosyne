@@ -98,12 +98,12 @@ def test_meta_returns_only_structural_metadata(api_fixture: ApiFixture) -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["api_version"] == "0.3.1"
+    assert body["api_version"] == "0.4.0"
     assert body["source_types"] == ["chatgpt"]
     assert body["topic_categories"] == ["topic"]
     assert body["counts"]["events"] == 11
     assert body["counts"]["topics"] > 0
-    assert body["counts"]["relations"] > 0
+    assert body["counts"]["relations"] == 0
     assert set(body) == {
         "earliest_event_at",
         "latest_event_at",
@@ -147,7 +147,7 @@ def test_topic_search_and_detail(api_fixture: ApiFixture) -> None:
     assert body["message_count"] == 1
     assert body["context_count"] == 1
     assert body["months"][0]["month"] == "2024-03"
-    assert body["neighbors"]
+    assert body["neighbors"] == []
     assert missing.status_code == 404
     assert missing.json()["detail"] == "topic_not_found"
 

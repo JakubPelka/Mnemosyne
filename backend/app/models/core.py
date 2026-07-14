@@ -70,6 +70,21 @@ class Event(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class AnalysisRun(Base):
+    __tablename__ = "analysis_runs"
+
+    analysis_run_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    analysis_version: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    configuration_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_event_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0", index=True
+    )
+
+
 class EventSegment(Base):
     __tablename__ = "event_segments"
     __table_args__ = (
@@ -82,6 +97,7 @@ class EventSegment(Base):
     )
 
     segment_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    analysis_run_id: Mapped[str | None] = mapped_column(String(128), index=True)
     event_id: Mapped[str] = mapped_column(
         ForeignKey("events.event_id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -110,6 +126,7 @@ class Topic(Base):
     __table_args__ = (UniqueConstraint("name", "category"),)
 
     topic_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    analysis_run_id: Mapped[str | None] = mapped_column(String(128), index=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     category: Mapped[str] = mapped_column(String(64), nullable=False, default="keyword")
     status: Mapped[str] = mapped_column(
@@ -117,6 +134,9 @@ class Topic(Base):
     )
     origin: Mapped[str] = mapped_column(
         String(32), nullable=False, default="automatic", server_default="automatic"
+    )
+    creation_method: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="high_confidence_phrase", server_default="legacy"
     )
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="1", index=True
@@ -143,6 +163,7 @@ class CandidateTerm(Base):
     )
 
     term_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    analysis_run_id: Mapped[str | None] = mapped_column(String(128), index=True)
     term: Mapped[str] = mapped_column(Text, nullable=False)
     normalized_term: Mapped[str] = mapped_column(Text, nullable=False)
     ngram_size: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -170,6 +191,7 @@ class TopicTerm(Base):
     topic_id: Mapped[str] = mapped_column(
         ForeignKey("topics.topic_id", ondelete="CASCADE"), primary_key=True
     )
+    analysis_run_id: Mapped[str | None] = mapped_column(String(128), index=True)
     term_id: Mapped[str] = mapped_column(
         ForeignKey("candidate_terms.term_id", ondelete="CASCADE"), primary_key=True
     )
@@ -182,6 +204,7 @@ class EventCandidateTerm(Base):
     event_id: Mapped[str] = mapped_column(
         ForeignKey("events.event_id", ondelete="CASCADE"), primary_key=True
     )
+    analysis_run_id: Mapped[str | None] = mapped_column(String(128), index=True)
     term_id: Mapped[str] = mapped_column(
         ForeignKey("candidate_terms.term_id", ondelete="CASCADE"), primary_key=True
     )
@@ -194,6 +217,7 @@ class EventTopic(Base):
     event_id: Mapped[str] = mapped_column(
         ForeignKey("events.event_id", ondelete="CASCADE"), primary_key=True
     )
+    analysis_run_id: Mapped[str | None] = mapped_column(String(128), index=True)
     topic_id: Mapped[str] = mapped_column(
         ForeignKey("topics.topic_id", ondelete="CASCADE"), primary_key=True
     )
@@ -205,6 +229,7 @@ class TopicRelation(Base):
     __table_args__ = (UniqueConstraint("source_topic_id", "target_topic_id"),)
 
     relation_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    analysis_run_id: Mapped[str | None] = mapped_column(String(128), index=True)
     source_topic_id: Mapped[str] = mapped_column(
         ForeignKey("topics.topic_id", ondelete="CASCADE"), nullable=False
     )
@@ -214,6 +239,22 @@ class TopicRelation(Base):
     message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     conversation_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     weight: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+
+class TopicAlias(Base):
+    __tablename__ = "topic_aliases"
+    __table_args__ = (UniqueConstraint("topic_id", "normalized_alias"),)
+
+    topic_alias_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    analysis_run_id: Mapped[str] = mapped_column(
+        ForeignKey("analysis_runs.analysis_run_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    topic_id: Mapped[str] = mapped_column(
+        ForeignKey("topics.topic_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    normalized_alias: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    display_alias: Mapped[str] = mapped_column(Text, nullable=False)
+    alias_type: Mapped[str] = mapped_column(String(32), nullable=False, default="term")
 
 
 class EventEntity(Base):

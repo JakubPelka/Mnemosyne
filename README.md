@@ -63,6 +63,7 @@ Lokalne endpointy danych:
 - `GET /api/topics/{topic_id}/terms` — terminy i aliasy tworzące temat;
 - `GET /api/topics/{topic_id}/occurrences` — paginowane fragmenty źródłowe;
 - `GET /api/search/events` — lokalne wyszukiwanie FTS5 segmentów; `content_scope=all|prose|code|commands|logs`, a wynik zawiera `match_type`;
+- `GET /api/search/resolve` — priorytetowe rozwiązywanie nazwy tematu, aliasu i dokładnego terminu;
 - `GET /api/topics/{topic_id}/intensity` — miesięczna intensywność;
 - `GET /api/messages/{event_id}/context` — ograniczony kontekst fragmentu.
 
@@ -73,6 +74,9 @@ python scripts/inspect_export.py sources/eksport.zip
 alembic upgrade head
 python scripts/import_export.py sources/eksport.zip
 python scripts/build_topic_graph.py
+python scripts/diagnose_analysis.py --summary
+python scripts/rebuild_analysis.py --dry-run
+python scripts/rebuild_analysis.py --fresh
 ```
 
 Importer przyjmuje również rozpakowany katalog. Domyślna baza `data/mnemosyne.sqlite3` oraz całe `sources/` są ignorowane przez Git. Ponowny import aktualizuje istniejące rekordy i nie tworzy duplikatów.
