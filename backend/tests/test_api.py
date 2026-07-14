@@ -98,7 +98,7 @@ def test_meta_returns_only_structural_metadata(api_fixture: ApiFixture) -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["api_version"] == "0.3.0"
+    assert body["api_version"] == "0.3.1"
     assert body["source_types"] == ["chatgpt"]
     assert body["topic_categories"] == ["topic"]
     assert body["counts"]["events"] == 11
@@ -171,6 +171,37 @@ def test_topic_list_terms_and_diagnostic_graph(api_fixture: ApiFixture) -> None:
     assert all(item["quality_status"] != "rejected" for item in terms.json()["items"])
     assert all(node["category"].startswith("candidate_") for node in term_graph.json()["nodes"])
     assert all(node["category"] == "topic" for node in topic_graph.json()["nodes"])
+
+
+def test_term_layer_preserves_search_detail_occurrences_and_context(
+    api_fixture: ApiFixture,
+) -> None:
+    with api_fixture.make_session() as session:
+        term = session.scalar(
+            select(CandidateTerm).where(
+                CandidateTerm.normalized_term == "garden", CandidateTerm.is_active.is_(True)
+            )
+        )
+    assert term is not None
+
+    search = api_fixture.client.get("/api/topics/search", params={"q": "GARDEN", "layer": "terms"})
+    detail = api_fixture.client.get(f"/api/topics/{term.term_id}", params={"layer": "terms"})
+    occurrences = api_fixture.client.get(
+        f"/api/topics/{term.term_id}/occurrences", params={"layer": "terms"}
+    )
+
+    assert any(item["topic_id"] == term.term_id for item in search.json()["items"])
+    assert detail.status_code == 200
+    assert detail.json()["layer"] == "terms"
+    assert detail.json()["months"]
+    assert detail.json()["neighbors"]
+    assert occurrences.status_code == 200
+    assert occurrences.json()["items"]
+    context = api_fixture.client.get(
+        f"/api/messages/{occurrences.json()['items'][0]['event_id']}/context"
+    )
+    assert context.status_code == 200
+    assert any(message["is_target"] for message in context.json()["messages"])
 
 
 def test_rejected_topic_terms_require_diagnostic_opt_in(api_fixture: ApiFixture) -> None:

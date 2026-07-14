@@ -12,7 +12,7 @@ test("API client maps graph filters to local endpoint", async () => {
   expect(url).toContain("end=2024-04-01");
   expect(url).toContain("source_type=chatgpt");
   expect(url).toContain("privacy_level=private");
-  expect(url).toContain("view=topics");
+  expect(url).toContain("layer=terms");
   expect(url).toContain("selected_topic_id=topic-one");
 });
 

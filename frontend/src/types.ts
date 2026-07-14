@@ -36,7 +36,9 @@ export interface MonthlyIntensity {
   weight: number;
 }
 
-export interface TopicSearchItem extends GraphNode {}
+export interface TopicSearchItem extends GraphNode {
+  layer: "terms" | "topics";
+}
 
 export interface TopicNeighbor {
   topic_id: string;
@@ -48,6 +50,7 @@ export interface TopicNeighbor {
 }
 
 export interface TopicDetail extends GraphNode {
+  layer: "terms" | "topics";
   months: MonthlyIntensity[];
   neighbors: TopicNeighbor[];
 }

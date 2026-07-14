@@ -11,7 +11,7 @@ test("selects a topic from search results", () => {
   const onSelect = vi.fn();
   render(<TopicSearchResults query="alp" results={[topic]} onSelect={onSelect} />);
   fireEvent.click(screen.getByRole("button", { name: /alpha/i }));
-  expect(onSelect).toHaveBeenCalledWith("topic-alpha");
+  expect(onSelect).toHaveBeenCalledWith("topic-alpha", "terms");
 });
 
 test("renders empty and backend error states", () => {
@@ -36,7 +36,7 @@ test("loads limited context after choosing an excerpt", () => {
   expect(screen.getByText("Synthetic target").closest("article")).toHaveClass("target");
 });
 
-test("switches to the diagnostic raw-term view", () => {
+test("switches to the beta topic view", () => {
   const onChange = vi.fn();
   render(
     <FilterPanel
@@ -48,6 +48,6 @@ test("switches to the diagnostic raw-term view", () => {
       onReset={vi.fn()}
     />,
   );
-  fireEvent.change(screen.getByLabelText("Widok grafu"), { target: { value: "terms" } });
-  expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ graphView: "terms" }));
+  fireEvent.change(screen.getByLabelText("Widok grafu"), { target: { value: "topics" } });
+  expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ graphView: "topics" }));
 });

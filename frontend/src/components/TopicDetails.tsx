@@ -59,7 +59,7 @@ export function TopicDetails({
       </section>
 
       <section>
-        <h3>Najbliższe tematy</h3>
+        <h3>{detail.layer === "terms" ? "Najbliższe terminy" : "Najbliższe tematy"}</h3>
         {detail.neighbors.length ? (
           <div className="neighbor-list">
             {detail.neighbors.map((neighbor) => (
@@ -73,7 +73,7 @@ export function TopicDetails({
 
       <section>
         <h3>Źródłowe fragmenty</h3>
-        {!occurrences?.items.length ? <p className="muted">Temat nie ma fragmentów w tym okresie.</p> : (
+        {!occurrences?.items.length ? <p className="muted">Brak fragmentów w tym okresie.</p> : (
           <div className="occurrences">
             {occurrences.items.map((item) => (
               <button key={item.event_id} type="button" onClick={() => onLoadContext(item.event_id)}>

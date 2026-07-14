@@ -70,7 +70,7 @@ export default function App() {
   }, [filters, selectedTopicId]);
 
   useEffect(() => {
-    if (!selectedTopicId || filters.graphView === "terms") {
+    if (!selectedTopicId) {
       setDetail(null);
       setOccurrences(null);
       setContext(null);
@@ -80,7 +80,7 @@ export default function App() {
     setDetailLoading(true);
     setDetailError(null);
     Promise.all([
-      api.topic(selectedTopicId, controller.signal),
+      api.topic(selectedTopicId, filters.graphView, controller.signal),
       api.occurrences(
         selectedTopicId,
         filters,
@@ -119,9 +119,9 @@ export default function App() {
     };
   }, [search]);
 
-  const selectTopic = useCallback((topicId: string) => {
-    setDraftFilters((value) => ({ ...value, graphView: "topics" }));
-    setFilters((value) => ({ ...value, graphView: "topics" }));
+  const selectResult = useCallback((topicId: string, layer: "terms" | "topics") => {
+    setDraftFilters((value) => ({ ...value, graphView: layer }));
+    setFilters((value) => ({ ...value, graphView: layer }));
     setSelectedTopicId(topicId);
     setOccurrenceOffset(0);
     setContext(null);
@@ -175,7 +175,7 @@ export default function App() {
             <span>Wyszukaj temat</span>
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="np. projekt" />
           </label>
-          <TopicSearchResults query={search} results={searchResults} onSelect={selectTopic} />
+          <TopicSearchResults query={search} results={searchResults} onSelect={selectResult} />
           <FilterPanel
             filters={draftFilters}
             meta={meta}
@@ -194,7 +194,7 @@ export default function App() {
         <section className="graph-panel" aria-label="Graf tematów">
           <div className="graph-caption">
             <span>{graph?.nodes.length ?? 0} węzłów · {graph?.edges.length ?? 0} relacji</span>
-            <span>{filters.graphView === "topics" ? "tematy" : "terminy diagnostyczne"} · rozmiar = intensywność okresu</span>
+            <span>{filters.graphView === "topics" ? "tematy beta" : "terminy"} · rozmiar = intensywność okresu</span>
           </div>
           <StatusPanel loading={loading} error={error} empty={!loading && !error && graph?.nodes.length === 0} />
           {graph && graph.nodes.length > 0 && <GraphCanvas data={graph} selectedTopicId={selectedTopicId} onSelect={selectGraphNode} />}
@@ -202,18 +202,16 @@ export default function App() {
 
         <aside className="right-panel">
           <div className="panel-heading"><span>02</span><h1>Szczegóły</h1></div>
-          {filters.graphView === "terms" ? (
-            <p className="empty-panel">Widok diagnostyczny pokazuje surowe kandydaty. Szczegóły i fragmenty są dostępne w widoku tematów.</p>
-          ) : <TopicDetails
+          <TopicDetails
             detail={detail}
             occurrences={occurrences}
             context={context}
             loading={detailLoading}
             error={detailError}
-            onSelectNeighbor={selectTopic}
+            onSelectNeighbor={(nodeId) => selectResult(nodeId, filters.graphView)}
             onLoadContext={loadContext}
             onPage={setOccurrenceOffset}
-          />}
+          />
         </aside>
       </div>
 

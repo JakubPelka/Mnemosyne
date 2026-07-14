@@ -1,7 +1,7 @@
 import type { GraphFilters } from "./types";
 
 export const DEFAULT_FILTERS: GraphFilters = {
-  graphView: "topics",
+  graphView: "terms",
   startMonth: "",
   endMonth: "",
   sourceType: "",
@@ -31,7 +31,7 @@ export function graphQuery(filters: GraphFilters, selectedTopicId: string | null
     min_relation_weight: String(filters.minRelationWeight),
     node_limit: String(filters.nodeLimit),
     privacy_level: "private",
-    view: filters.graphView,
+    layer: filters.graphView,
   });
   if (filters.startMonth) params.set("start", startOfMonth(filters.startMonth));
   if (filters.endMonth) params.set("end", startOfNextMonth(filters.endMonth));

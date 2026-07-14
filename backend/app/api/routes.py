@@ -28,19 +28,23 @@ from backend.app.main_version import API_VERSION
 from backend.app.services.catalog import (
     EventExcerptPage,
     get_catalog_meta,
+    get_term_detail,
+    get_term_occurrences,
     get_topic_detail,
     get_topic_occurrences,
     get_topic_terms,
     search_events,
+    search_catalog,
     search_topics,
 )
 from backend.app.services.context import get_message_context
 from backend.app.services.graph import get_candidate_term_graph, get_topic_graph
-from backend.app.services.topics import topic_monthly_intensity
+from backend.app.services.topics import term_monthly_intensity, topic_monthly_intensity
 
 router = APIRouter(prefix="/api")
 DatabaseSession = Annotated[Session, Depends(get_session)]
 PrivacyLevel = Literal["private", "sensitive", "personal", "public"]
+Layer = Literal["terms", "topics"]
 
 
 @router.get("/meta", response_model=MetaResponse)
@@ -74,7 +78,8 @@ def graph(
     node_limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     selected_topic_id: str | None = None,
     neighbors_only: bool = False,
-    view: Literal["topics", "terms"] = "topics",
+    layer: Layer = "terms",
+    view: Literal["topics", "terms"] | None = None,
     include_rejected: bool = False,
 ) -> GraphResponse:
     common = dict(
@@ -88,7 +93,8 @@ def graph(
         node_limit=node_limit,
         neighbors_only=neighbors_only,
     )
-    if view == "terms":
+    selected_layer = view or layer
+    if selected_layer == "terms":
         result = get_candidate_term_graph(
             session,
             **common,
@@ -114,11 +120,14 @@ def topic_search(
     q: Annotated[str, Query(min_length=1, max_length=200)],
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     privacy_level: PrivacyLevel = "private",
+    layer: Literal["terms", "topics", "all"] = "all",
 ) -> TopicSearchResponse:
     return TopicSearchResponse(
         items=[
             TopicSearchItemResponse(**asdict(item))
-            for item in search_topics(session, q, limit=limit, privacy_level=privacy_level)
+            for item in search_catalog(
+                session, q, layer=layer, limit=limit, privacy_level=privacy_level
+            )
         ]
     )
 
@@ -160,8 +169,13 @@ def topic_detail(
     topic_id: str,
     session: DatabaseSession,
     privacy_level: PrivacyLevel = "private",
+    layer: Layer = "topics",
 ) -> TopicDetailResponse:
-    detail = get_topic_detail(session, topic_id, privacy_level=privacy_level)
+    detail = (
+        get_term_detail(session, topic_id, privacy_level=privacy_level)
+        if layer == "terms"
+        else get_topic_detail(session, topic_id, privacy_level=privacy_level)
+    )
     if detail is None:
         raise HTTPException(status_code=404, detail="topic_not_found")
     return TopicDetailResponse(
@@ -176,8 +190,13 @@ def topic_intensity(
     topic_id: str,
     session: DatabaseSession,
     privacy_level: PrivacyLevel = "private",
+    layer: Layer = "topics",
 ) -> TopicIntensityResponse:
-    values = topic_monthly_intensity(session, topic_id, privacy_level=privacy_level)
+    values = (
+        term_monthly_intensity(session, topic_id, privacy_level=privacy_level)
+        if layer == "terms"
+        else topic_monthly_intensity(session, topic_id, privacy_level=privacy_level)
+    )
     return TopicIntensityResponse(
         topic_id=topic_id,
         months=[MonthlyIntensityResponse(**asdict(value)) for value in values],
@@ -197,8 +216,10 @@ def topic_occurrences(
     privacy_level: PrivacyLevel = "private",
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
+    layer: Layer = "topics",
 ) -> PaginatedEventExcerptResponse:
-    page = get_topic_occurrences(
+    occurrence_getter = get_term_occurrences if layer == "terms" else get_topic_occurrences
+    page = occurrence_getter(
         session,
         topic_id,
         start=start,

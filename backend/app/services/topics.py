@@ -23,6 +23,7 @@ from backend.app.models import (
     TopicRelation,
     TopicTerm,
 )
+from backend.app.nlp.lexicons import ALL_STOPWORDS
 from backend.app.nlp.quality import (
     TermQuality,
     assess_term,
@@ -61,6 +62,7 @@ class _Document:
     context_id: str
     timestamp: datetime | None
     terms: Counter[str]
+    acronyms: frozenset[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +72,8 @@ class _CandidateMetrics:
     context_count: int
     tfidf_score: float
     quality: TermQuality
+    is_acronym: bool
+    is_manual: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +119,7 @@ def build_topics(
         for term in document.terms:
             document_frequency[term] += 1
             term_contexts[term].add(document.context_id)
+    acronym_terms = {term for document in documents for term in document.acronyms}
 
     overrides = load_topic_overrides(overrides_path)
     manual_aliases = {alias for override in overrides for alias in override.aliases}
@@ -122,7 +127,7 @@ def build_topics(
         document_frequency,
         key=lambda term: (-document_frequency[term], -term.count(" "), term),
     )[:max_candidate_terms]
-    selected_terms = set(ranked_terms) | manual_aliases
+    selected_terms = set(ranked_terms) | manual_aliases | acronym_terms
     document_count = len(documents)
     for document in documents:
         for term, frequency in document.terms.items():
@@ -140,6 +145,7 @@ def build_topics(
         document_count=document_count,
         min_document_frequency=min_document_frequency,
         manual_aliases=manual_aliases,
+        acronym_terms=acronym_terms,
     )
     _persist_candidates(session, metrics)
     candidate_assignments = _candidate_assignments(
@@ -206,6 +212,34 @@ def topic_monthly_intensity(
     )
 
 
+def term_monthly_intensity(
+    session: Session,
+    term_id: str,
+    *,
+    privacy_level: str = "private",
+) -> tuple[MonthlyIntensity, ...]:
+    rows = session.execute(
+        select(
+            func.strftime("%Y-%m", Event.timestamp_start).label("month"),
+            func.count(EventCandidateTerm.event_id),
+            func.sum(EventCandidateTerm.weight),
+        )
+        .join(EventCandidateTerm, EventCandidateTerm.event_id == Event.event_id)
+        .where(
+            EventCandidateTerm.term_id == term_id,
+            Event.is_active.is_(True),
+            Event.privacy_level == privacy_level,
+            Event.timestamp_start.is_not(None),
+        )
+        .group_by("month")
+        .order_by("month")
+    )
+    return tuple(
+        MonthlyIntensity(month=month, message_count=count, weight=float(weight or 0.0))
+        for month, count, weight in rows
+    )
+
+
 def stable_term_id(term: str) -> str:
     normalized = normalize_term(term)
     return f"term-{hashlib.sha256(normalized.encode()).hexdigest()}"
@@ -234,6 +268,13 @@ def extract_candidate_terms(text: str, *, include_trigrams: bool = True) -> Coun
     return terms
 
 
+def extract_acronyms(text: str) -> frozenset[str]:
+    values = re.findall(r"(?<![\w-])[A-ZÅÄÖ]{2,6}(?![\w-])", unicodedata.normalize("NFKC", text))
+    return frozenset(
+        normalize_term(value) for value in values if value.casefold() not in ALL_STOPWORDS
+    )
+
+
 def _load_documents(session: Session, *, include_trigrams: bool) -> list[_Document]:
     rows = session.execute(
         select(Event.event_id, Event.context_id, Event.timestamp_start, Event.text).where(
@@ -248,6 +289,7 @@ def _load_documents(session: Session, *, include_trigrams: bool) -> list[_Docume
             context_id=context_id or event_id,
             timestamp=timestamp,
             terms=extract_candidate_terms(text, include_trigrams=include_trigrams),
+            acronyms=extract_acronyms(text),
         )
         for event_id, context_id, timestamp, text in rows
         if text and text.strip()
@@ -263,6 +305,7 @@ def _candidate_metrics(
     document_count: int,
     min_document_frequency: int,
     manual_aliases: set[str],
+    acronym_terms: set[str],
 ) -> dict[str, _CandidateMetrics]:
     result = {}
     for term in sorted(selected_terms):
@@ -274,6 +317,7 @@ def _candidate_metrics(
             document_count=document_count,
             tfidf_score=tfidf_score,
             min_document_frequency=min_document_frequency,
+            allow_short_acronym=term in acronym_terms,
         )
         if term in manual_aliases:
             quality = TermQuality(
@@ -290,6 +334,8 @@ def _candidate_metrics(
             context_count=len(term_contexts[term]),
             tfidf_score=tfidf_score,
             quality=quality,
+            is_acronym=term in acronym_terms,
+            is_manual=term in manual_aliases,
         )
     return result
 
@@ -349,7 +395,7 @@ def _candidate_assignments(
 ) -> list[dict[str, object]]:
     rows = []
     for document in documents:
-        ranked = sorted(
+        scored = sorted(
             (
                 (
                     frequency
@@ -360,7 +406,14 @@ def _candidate_assignments(
                 if (metric := metrics.get(term)) is not None
             ),
             key=lambda item: (-item[0], -item[1].count(" "), item[1]),
-        )[:candidate_terms_per_event]
+        )
+        ranked = scored[:candidate_terms_per_event]
+        selected = {term for _score, term in ranked}
+        ranked.extend(
+            (score, term)
+            for score, term in scored[candidate_terms_per_event:]
+            if term not in selected and (metrics[term].is_acronym or metrics[term].is_manual)
+        )
         rows.extend(
             {"event_id": document.event_id, "term_id": stable_term_id(term), "weight": score}
             for score, term in ranked
@@ -427,8 +480,7 @@ def _build_topic_definitions(
             item[0],
         ),
     )
-    automatic_limit = max(0, max_topics - len(definitions))
-    for canonical, terms in ranked_groups[:automatic_limit]:
+    for canonical, terms in ranked_groups:
         ranked = sorted(
             terms,
             key=lambda term: (
@@ -439,6 +491,12 @@ def _build_topic_definitions(
         )
         primary = ranked[0]
         aliases = tuple(dict.fromkeys([*ranked, *sorted(phrase_aliases.get(primary, set()))]))
+        primary_metric = accepted[primary]
+        qualifies = (
+            len(terms) >= 2 or primary_metric.quality.ngram_size >= 2 or primary_metric.is_acronym
+        )
+        if not qualifies:
+            continue
         definitions.append(
             _TopicDefinition(
                 topic_id=stable_topic_id(canonical),
@@ -449,6 +507,8 @@ def _build_topic_definitions(
                 aliases=aliases,
             )
         )
+        if len(definitions) >= max_topics:
+            break
     return tuple(definitions)
 
 

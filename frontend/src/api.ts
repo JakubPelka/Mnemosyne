@@ -23,12 +23,12 @@ export const api = {
     request<GraphResponse>(`/api/graph?${graphQuery(filters, selectedTopicId)}`, signal),
   searchTopics: (query: string, signal?: AbortSignal) =>
     request<{ items: TopicSearchItem[] }>(
-      `/api/topics/search?q=${encodeURIComponent(query)}&limit=12&privacy_level=private`,
+      `/api/topics/search?q=${encodeURIComponent(query)}&limit=12&privacy_level=private&layer=all`,
       signal,
     ),
-  topic: (topicId: string, signal?: AbortSignal) =>
+  topic: (topicId: string, layer: GraphFilters["graphView"], signal?: AbortSignal) =>
     request<TopicDetail>(
-      `/api/topics/${encodeURIComponent(topicId)}?privacy_level=private`,
+      `/api/topics/${encodeURIComponent(topicId)}?privacy_level=private&layer=${layer}`,
       signal,
     ),
   occurrences: (
@@ -39,7 +39,7 @@ export const api = {
     signal?: AbortSignal,
   ) =>
     request<EventExcerptPage>(
-      `/api/topics/${encodeURIComponent(topicId)}/occurrences?${occurrenceQuery(filters, limit, offset)}`,
+      `/api/topics/${encodeURIComponent(topicId)}/occurrences?${occurrenceQuery(filters, limit, offset)}&layer=${filters.graphView}`,
       signal,
     ),
   context: (eventId: string, signal?: AbortSignal) =>

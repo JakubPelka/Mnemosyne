@@ -6,20 +6,25 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import distinct, func, select, text
+from sqlalchemy import distinct, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from backend.app.models import (
     CandidateTerm,
     ChatGPTMessageModel,
     Event,
+    EventCandidateTerm,
     EventTopic,
     Source,
     Topic,
     TopicRelation,
     TopicTerm,
 )
-from backend.app.services.topics import MonthlyIntensity, topic_monthly_intensity
+from backend.app.services.topics import (
+    MonthlyIntensity,
+    term_monthly_intensity,
+    topic_monthly_intensity,
+)
 
 _SNIPPET_LENGTH = 280
 _SEARCH_TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
@@ -45,6 +50,7 @@ class TopicSummary:
     context_count: int
     first_seen_at: datetime | None
     last_seen_at: datetime | None
+    layer: str = "topics"
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,11 +166,16 @@ def search_topics(
         )
         .join(EventTopic, EventTopic.topic_id == Topic.topic_id)
         .join(Event, Event.event_id == EventTopic.event_id)
+        .outerjoin(TopicTerm, TopicTerm.topic_id == Topic.topic_id)
+        .outerjoin(CandidateTerm, CandidateTerm.term_id == TopicTerm.term_id)
         .where(
             Event.is_active.is_(True),
             Event.privacy_level == privacy_level,
             Topic.is_active.is_(True),
-            Topic.name.ilike(pattern, escape="\\"),
+            or_(
+                Topic.name.ilike(pattern, escape="\\"),
+                CandidateTerm.normalized_term.ilike(pattern, escape="\\"),
+            ),
         )
         .group_by(Topic.topic_id, Topic.name, Topic.category)
         .order_by(func.count(distinct(Event.event_id)).desc(), Topic.name)
@@ -172,6 +183,116 @@ def search_topics(
         .offset(offset)
     )
     return tuple(TopicSummary(*row) for row in session.execute(statement))
+
+
+def search_terms(
+    session: Session,
+    query: str,
+    *,
+    limit: int = 20,
+    offset: int = 0,
+    privacy_level: str = "private",
+) -> tuple[TopicSummary, ...]:
+    pattern = f"%{_escape_like(query.strip())}%"
+    rows = session.execute(
+        select(
+            CandidateTerm.term_id,
+            CandidateTerm.term,
+            func.count(distinct(Event.event_id)),
+            func.count(distinct(func.coalesce(Event.context_id, Event.event_id))),
+            func.min(Event.timestamp_start),
+            func.max(Event.timestamp_start),
+        )
+        .join(EventCandidateTerm, EventCandidateTerm.term_id == CandidateTerm.term_id)
+        .join(Event, Event.event_id == EventCandidateTerm.event_id)
+        .where(
+            CandidateTerm.is_active.is_(True),
+            Event.is_active.is_(True),
+            Event.privacy_level == privacy_level,
+            CandidateTerm.normalized_term.ilike(pattern, escape="\\"),
+        )
+        .group_by(CandidateTerm.term_id, CandidateTerm.term)
+        .order_by(func.count(distinct(Event.event_id)).desc(), CandidateTerm.term)
+        .limit(limit)
+        .offset(offset)
+    )
+    return tuple(
+        TopicSummary(
+            topic_id=term_id,
+            name=term,
+            category="term",
+            message_count=message_count,
+            context_count=context_count,
+            first_seen_at=first_seen,
+            last_seen_at=last_seen,
+            layer="terms",
+        )
+        for term_id, term, message_count, context_count, first_seen, last_seen in rows
+    )
+
+
+def search_catalog(
+    session: Session,
+    query: str,
+    *,
+    layer: str = "all",
+    limit: int = 20,
+    privacy_level: str = "private",
+) -> tuple[TopicSummary, ...]:
+    values = []
+    if layer in {"all", "topics"}:
+        values.extend(search_topics(session, query, limit=limit, privacy_level=privacy_level))
+    if layer in {"all", "terms"}:
+        values.extend(search_terms(session, query, limit=limit, privacy_level=privacy_level))
+    values.sort(key=lambda item: (-item.message_count, item.layer, item.name))
+    return tuple(values[:limit])
+
+
+def get_term_detail(
+    session: Session,
+    term_id: str,
+    *,
+    privacy_level: str = "private",
+    neighbor_limit: int = 12,
+) -> TopicDetail | None:
+    term = session.get(CandidateTerm, term_id)
+    if term is None or not term.is_active:
+        return None
+    row = session.execute(
+        select(
+            func.count(distinct(Event.event_id)),
+            func.count(distinct(func.coalesce(Event.context_id, Event.event_id))),
+            func.min(Event.timestamp_start),
+            func.max(Event.timestamp_start),
+        )
+        .join(EventCandidateTerm, EventCandidateTerm.event_id == Event.event_id)
+        .where(
+            EventCandidateTerm.term_id == term_id,
+            Event.is_active.is_(True),
+            Event.privacy_level == privacy_level,
+        )
+    ).one()
+    summary = TopicSummary(
+        topic_id=term.term_id,
+        name=term.term,
+        category="term",
+        message_count=int(row[0] or 0),
+        context_count=int(row[1] or 0),
+        first_seen_at=row[2],
+        last_seen_at=row[3],
+        layer="terms",
+    )
+    return TopicDetail(
+        summary=summary,
+        months=term_monthly_intensity(session, term_id, privacy_level=privacy_level),
+        neighbors=_term_neighbors(
+            session,
+            term_id,
+            target_count=summary.message_count,
+            privacy_level=privacy_level,
+            limit=neighbor_limit,
+        ),
+    )
 
 
 def get_topic_terms(
@@ -306,6 +427,56 @@ def get_topic_occurrences(
     return EventExcerptPage(items=items, total=int(total), limit=limit, offset=offset)
 
 
+def get_term_occurrences(
+    session: Session,
+    term_id: str,
+    *,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    source_type: str | None = None,
+    privacy_level: str = "private",
+    limit: int = 20,
+    offset: int = 0,
+) -> EventExcerptPage | None:
+    term = session.get(CandidateTerm, term_id)
+    if term is None or not term.is_active:
+        return None
+    filters = [
+        EventCandidateTerm.term_id == term_id,
+        Event.is_active.is_(True),
+        Event.privacy_level == privacy_level,
+    ]
+    if start is not None:
+        filters.append(Event.timestamp_start >= start)
+    if end is not None:
+        filters.append(Event.timestamp_start < end)
+    if source_type is not None:
+        filters.append(Source.source_type == source_type)
+    base = (
+        select(
+            Event.event_id,
+            Event.timestamp_start,
+            ChatGPTMessageModel.role,
+            Event.title,
+            Event.text,
+            Event.source_record_id,
+        )
+        .join(EventCandidateTerm, EventCandidateTerm.event_id == Event.event_id)
+        .join(Source, Source.source_id == Event.source_id)
+        .outerjoin(ChatGPTMessageModel, ChatGPTMessageModel.event_id == Event.event_id)
+        .where(*filters)
+    )
+    total = session.scalar(select(func.count()).select_from(base.subquery())) or 0
+    rows = session.execute(
+        base.order_by(Event.timestamp_start.desc(), Event.event_id).limit(limit).offset(offset)
+    )
+    items = tuple(
+        EventExcerpt(event_id, occurred_at, role, title, _snippet(body), source_record_id)
+        for event_id, occurred_at, role, title, body, source_record_id in rows
+    )
+    return EventExcerptPage(items=items, total=int(total), limit=limit, offset=offset)
+
+
 def search_events(
     session: Session,
     query: str,
@@ -422,6 +593,78 @@ def _topic_neighbors(
                 topic_id=neighbor_id,
                 name=name,
                 category=category,
+                message_count=message_count,
+                context_count=len(contexts[neighbor_id]),
+                weight=message_count / denominator if denominator else 0.0,
+            )
+        )
+    return tuple(sorted(result, key=lambda item: (-item.weight, item.name))[:limit])
+
+
+def _term_neighbors(
+    session: Session,
+    term_id: str,
+    *,
+    target_count: int,
+    privacy_level: str,
+    limit: int,
+) -> tuple[TopicNeighbor, ...]:
+    target_events = (
+        select(EventCandidateTerm.event_id)
+        .join(Event, Event.event_id == EventCandidateTerm.event_id)
+        .where(
+            EventCandidateTerm.term_id == term_id,
+            Event.is_active.is_(True),
+            Event.privacy_level == privacy_level,
+        )
+    )
+    rows = session.execute(
+        select(
+            CandidateTerm.term_id,
+            CandidateTerm.term,
+            Event.event_id,
+            func.coalesce(Event.context_id, Event.event_id),
+        )
+        .join(EventCandidateTerm, EventCandidateTerm.term_id == CandidateTerm.term_id)
+        .join(Event, Event.event_id == EventCandidateTerm.event_id)
+        .where(
+            EventCandidateTerm.event_id.in_(target_events),
+            EventCandidateTerm.term_id != term_id,
+            CandidateTerm.is_active.is_(True),
+            Event.is_active.is_(True),
+            Event.privacy_level == privacy_level,
+        )
+    )
+    names: dict[str, str] = {}
+    messages: Counter[str] = Counter()
+    contexts: dict[str, set[str]] = defaultdict(set)
+    for neighbor_id, name, event_id, context_id in rows:
+        names[neighbor_id] = name
+        messages[neighbor_id] += 1
+        contexts[neighbor_id].add(context_id)
+    totals = dict(
+        session.execute(
+            select(
+                EventCandidateTerm.term_id,
+                func.count(distinct(EventCandidateTerm.event_id)),
+            )
+            .join(Event, Event.event_id == EventCandidateTerm.event_id)
+            .where(
+                EventCandidateTerm.term_id.in_(messages),
+                Event.is_active.is_(True),
+                Event.privacy_level == privacy_level,
+            )
+            .group_by(EventCandidateTerm.term_id)
+        ).all()
+    )
+    result = []
+    for neighbor_id, message_count in messages.items():
+        denominator = math.sqrt(target_count * totals.get(neighbor_id, 0))
+        result.append(
+            TopicNeighbor(
+                topic_id=neighbor_id,
+                name=names[neighbor_id],
+                category="term",
                 message_count=message_count,
                 context_count=len(contexts[neighbor_id]),
                 weight=message_count / denominator if denominator else 0.0,

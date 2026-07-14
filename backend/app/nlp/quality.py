@@ -6,7 +6,12 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Literal
 
-from backend.app.nlp.lexicons import ALL_STOPWORDS, EXPORT_ARTIFACTS, STOPWORDS_BY_LANGUAGE
+from backend.app.nlp.lexicons import (
+    ALL_STOPWORDS,
+    CODE_TOKENS,
+    EXPORT_ARTIFACTS,
+    STOPWORDS_BY_LANGUAGE,
+)
 
 RejectionReason = Literal[
     "stopword",
@@ -16,6 +21,7 @@ RejectionReason = Literal[
     "low_information",
     "invalid_token",
     "duplicate_variant",
+    "code_token",
 ]
 
 _TOKEN_PATTERN = re.compile(r"[^\W_]+(?:[-+.#][^\W_]+)*", re.UNICODE)
@@ -61,6 +67,10 @@ def is_export_artifact(tokens: tuple[str, ...]) -> bool:
     return any(token in EXPORT_ARTIFACTS or _ARTIFACT_VARIANT.fullmatch(token) for token in tokens)
 
 
+def is_code_token(tokens: tuple[str, ...]) -> bool:
+    return any(token in CODE_TOKENS for token in tokens)
+
+
 def assess_term(
     value: str,
     *,
@@ -70,6 +80,7 @@ def assess_term(
     min_document_frequency: int = 2,
     max_document_ratio: float = 0.10,
     min_characters: int = 3,
+    allow_short_acronym: bool = False,
 ) -> TermQuality:
     normalized = normalize_term(value)
     tokens = term_tokens(normalized)
@@ -82,7 +93,9 @@ def assess_term(
         reason = "invalid_token"
     elif is_export_artifact(tokens):
         reason = "export_artifact"
-    elif compact_length < min_characters:
+    elif is_code_token(tokens):
+        reason = "code_token"
+    elif compact_length < min_characters and not allow_short_acronym:
         reason = "too_short"
     elif all(token in ALL_STOPWORDS for token in tokens):
         reason = "stopword"

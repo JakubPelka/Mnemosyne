@@ -38,8 +38,8 @@ export function FilterPanel({
             })
           }
         >
-          <option value="topics">Tematy</option>
-          <option value="terms">Surowe terminy (diagnostyczne)</option>
+          <option value="terms">Terminy</option>
+          <option value="topics">Tematy (beta)</option>
         </select>
       </label>
       <label>

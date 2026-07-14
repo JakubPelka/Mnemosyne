@@ -1,4 +1,9 @@
-from backend.app.nlp.quality import assess_term, is_export_artifact, phrase_suppresses_unigram
+from backend.app.nlp.quality import (
+    assess_term,
+    is_code_token,
+    is_export_artifact,
+    phrase_suppresses_unigram,
+)
 from backend.app.services.topic_overrides import load_topic_overrides
 from backend.app.services.topics import stable_term_id, stable_topic_id
 
@@ -36,6 +41,24 @@ def test_rejects_short_common_and_invalid_terms() -> None:
 
 def test_rejects_single_occurrence_as_low_information() -> None:
     assert quality("rare-domain", frequency=1).rejection_reason == "low_information"
+
+
+def test_rejects_code_and_documentation_tokens() -> None:
+    for value in ("return", "def", "none", "path", "defaults", "lists", "help"):
+        result = quality(value)
+        assert result.rejection_reason == "code_token"
+        assert is_code_token((value,))
+
+
+def test_allows_short_informative_acronym_when_explicitly_detected() -> None:
+    result = assess_term(
+        "AI",
+        document_frequency=4,
+        document_count=100,
+        tfidf_score=3.0,
+        allow_short_acronym=True,
+    )
+    assert result.status == "accepted"
 
 
 def test_prefers_an_informative_bigram_over_covered_unigram() -> None:

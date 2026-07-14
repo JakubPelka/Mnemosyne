@@ -8,6 +8,7 @@ export const topic: TopicSearchItem = {
   context_count: 3,
   first_seen_at: "2024-01-01T00:00:00Z",
   last_seen_at: "2024-03-01T00:00:00Z",
+  layer: "terms",
 };
 
 export const graphResponse: GraphResponse = {

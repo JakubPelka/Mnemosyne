@@ -197,7 +197,7 @@ def get_candidate_term_graph(
         .where(Event.is_active.is_(True), Event.privacy_level == privacy_level)
     )
     if not include_rejected:
-        statement = statement.where(CandidateTerm.quality_status != "rejected")
+        statement = statement.where(CandidateTerm.is_active.is_(True))
     if start is not None:
         statement = statement.where(Event.timestamp_start >= start)
     if end is not None:

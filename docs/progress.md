@@ -2,6 +2,51 @@
 
 Ten dokument jest zwięzłym dziennikiem logicznych bloków prac. Szczegółowe raporty powstają tylko dla kamieni milowych, większych migracji, zmian architektury i audytów bezpieczeństwa.
 
+## 2026-07-14 — Korekta modelu po regresji Topic Quality
+
+### Wykonane zadania
+
+- potwierdzono, że `main` pozostaje na stabilnym Visual MVP, bez merge'a regresyjnej gałęzi;
+- zidentyfikowano automatyczną promocję singletonów jako główną przyczynę regresji;
+- dodano odrzucanie tokenów kodowych i dokumentacyjnych bez wpływu na FTS;
+- dodano wykrywanie akronimów z oryginalnej pisowni i ochronę ich przypisań przed limitem rankingu;
+- zablokowano promocję 1:1: automatyczny temat wymaga grupy, frazy albo akronimu;
+- przywrócono pełne szczegóły, intensywność, sąsiedztwo, fragmenty i kontekst dla terminów;
+- dodano warstwowe, niewrażliwe na wielkość liter wyszukiwanie nazw, aliasów i kandydatów;
+- ustawiono „Terminy” jako domyślną warstwę, a „Tematy (beta)” jako opcjonalną;
+- zapisano korektę architektury w ADR 0007 i unieważniono błędny raport ukończenia.
+
+### Zmienione pliki
+
+- NLP i analiza: `backend/app/nlp/`, `backend/app/services/topics.py`;
+- warstwy zapytań i API: `backend/app/services/catalog.py`, `graph.py`, `backend/app/api/`;
+- frontend: `frontend/src/` oraz testy klienta i komponentów;
+- testy regresyjne: `backend/tests/test_topic_quality.py`, `test_database_import.py`, `test_api.py`;
+- dokumentacja: `docs/architecture.md`, ADR 0007 i historyczny raport Topic Quality v1.
+
+### Testy i wyniki
+
+- `pytest -q`: 39 testów zaliczonych;
+- `ruff check backend scripts`: zaliczone;
+- frontend: 11 testów i produkcyjny build zaliczone;
+- syntetyczne `GIS/gis`: wyszukiwanie niewrażliwe na wielkość liter zaliczone;
+- pięć wskazanych unigramów kodowych odrzuconych, zero odpowiadających tematów;
+- trzy ręcznie zatwierdzone tematy dają dokładnie trzy węzły, bez dopełniania do 30;
+- warstwa terminów zachowuje szczegóły, intensywność, sąsiedztwo, fragmenty i kontekst.
+
+### Decyzje techniczne, ograniczenia i następny krok
+
+- parametr `layer` jest nowym jawnym kontraktem; `view` grafu pozostaje kompatybilnym aliasem;
+- rozpoznanie akronimu wymaga oryginalnej pisowni wersalikami albo ręcznego override;
+- nieśledzony `start.sh` pozostaje nietknięty i poza zakresem commitów;
+- rzeczywista baza nie została jeszcze przebudowana po korekcie;
+- następny krok: przebudowa lokalna, bezpieczna kontrola wyszukiwania akronimu i liczników obu warstw.
+
+### Commity
+
+- baza naprawy: `7a65119`;
+- bieżący blok: oczekuje na commit.
+
 ## 2026-07-13 — Lokalny graf tematów i pierwszy pionowy wycinek API
 
 ### Wykonane zadania

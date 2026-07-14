@@ -52,3 +52,34 @@ EXPORT_ARTIFACTS = frozenset(
         "user",
     }
 )
+
+CODE_TOKENS = frozenset(
+    {
+        "args",
+        "class",
+        "const",
+        "def",
+        "default",
+        "defaults",
+        "dict",
+        "false",
+        "frame",
+        "from",
+        "function",
+        "help",
+        "import",
+        "kwargs",
+        "let",
+        "line",
+        "list",
+        "lists",
+        "none",
+        "null",
+        "path",
+        "return",
+        "self",
+        "string",
+        "true",
+        "var",
+    }
+)

@@ -76,6 +76,7 @@ class TopicSearchItemResponse(BaseModel):
     context_count: int
     first_seen_at: datetime | None
     last_seen_at: datetime | None
+    layer: str = "topics"
 
 
 class TopicSearchResponse(BaseModel):
@@ -121,6 +122,7 @@ class TopicDetailResponse(BaseModel):
     last_seen_at: datetime | None
     months: list[MonthlyIntensityResponse]
     neighbors: list[TopicNeighborResponse]
+    layer: str = "topics"
 
 
 class EventExcerptResponse(BaseModel):

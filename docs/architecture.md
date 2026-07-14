@@ -35,7 +35,9 @@ Publiczny kontrakt lokalnego backendu jest opisany modelami Pydantic. Wyszukiwan
 
 Każde zdarzenie ma neutralne `context_id`, `is_active` oraz `analysis_enabled`. `context_id` grupuje zdarzenia bez zależności od typu źródła, `is_active` pozwala zachować historię rekordów nieobecnych w nowszym imporcie, a `analysis_enabled` oddziela przechowywanie tekstu od zgody na udział w NLP. Dla ChatGPT analizowane są tylko widoczne `text` i `multimodal_text`.
 
-Analiza najpierw zapisuje surowe unigramy, bigramy i opcjonalne trigramy jako `CandidateTerm`. Deterministyczne reguły jakości zachowują odrzucone rekordy wraz z powodem, lecz wyłączają je z grafu. Zaakceptowane frazy i warianty są grupowane w prezentacyjne `Topic`; `topic_terms` zachowuje pochodzenie, aliasy i ręczne mapowania. `event_candidate_terms` umożliwia diagnostykę surowej analizy, a `event_topics` zasila domyślny graf. Lokalne nadpisania mogą być przechowywane wyłącznie w ignorowanym `data/local_topic_overrides.yaml`.
+Analiza najpierw zapisuje unigramy, bigramy i opcjonalne trigramy jako `CandidateTerm`. Deterministyczne reguły jakości zachowują odrzucone rekordy wraz z powodem, lecz wyłączają je z domyślnej eksploracji. Aktywne kandydaty tworzą domyślną warstwę „Terminy” z pełnymi statystykami i kontekstem.
+
+`Topic` jest osobną warstwą beta. Powstaje tylko z ręcznego mapowania, wielu wariantów, wartościowej frazy albo rozpoznanego akronimu; zaakceptowany singleton nie jest automatycznie promowany. `topic_terms` zachowuje pochodzenie, aliasy i ręczne mapowania, `event_candidate_terms` zasila eksplorację terminów, a `event_topics` graf tematów beta. Lokalne nadpisania mogą być przechowywane wyłącznie w ignorowanym `data/local_topic_overrides.yaml`.
 
 ## Decyzje odłożone do inspekcji
 

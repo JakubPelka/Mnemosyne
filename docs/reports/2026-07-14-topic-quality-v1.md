@@ -1,5 +1,7 @@
 # Topic Quality v1 — raport kamienia milowego
 
+> **Status: unieważniony 2026-07-14.** Ocena użytkowa wykazała regresję: automatyczne tematy nadal były w praktyce przefiltrowanymi singletonami, a domyślny widok utracił użyteczną eksplorację terminów. Ten plik pozostaje historycznym zapisem błędnej walidacji; aktualny stan opisuje raport naprawy regresji.
+
 Data: 2026-07-14.
 
 ## Cel i stan funkcjonalny

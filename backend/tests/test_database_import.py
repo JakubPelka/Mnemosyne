@@ -22,6 +22,7 @@ from backend.app.models import (
 from backend.app.services.context import get_message_context
 from backend.app.services.graph import get_topic_graph
 from backend.app.services.import_chatgpt import import_chatgpt_export
+from backend.app.services.catalog import search_catalog
 from backend.app.services.topics import build_topics, topic_monthly_intensity
 
 FIXTURE_DIR = Path(__file__).parents[2] / "sample_data"
@@ -39,6 +40,45 @@ def _alembic_config(database_path: Path) -> Config:
     config = Config(str(Path(__file__).parents[2] / "alembic.ini"))
     config.set_main_option("sqlalchemy.url", sqlite_url(database_path))
     return config
+
+
+def _insert_analysis_events(make_session, texts: list[str]) -> None:
+    now = datetime(2024, 1, 1, tzinfo=UTC)
+    with make_session() as session:
+        session.add(
+            Source(
+                source_id="source-quality-regression",
+                source_type="chatgpt",
+                name="Synthetic quality fixture",
+                imported_at=now,
+                original_path_hash="synthetic-hash",
+                metadata_json={},
+            )
+        )
+        session.flush()
+        for index, value in enumerate(texts):
+            session.add(
+                Event(
+                    event_id=f"event-quality-{index}",
+                    source_id="source-quality-regression",
+                    source_record_id=f"record-quality-{index}",
+                    event_type="message",
+                    context_id=f"context-quality-{index}",
+                    timestamp_start=now,
+                    timestamp_end=None,
+                    title=None,
+                    text=value,
+                    url=None,
+                    location_id=None,
+                    privacy_level="private",
+                    is_active=True,
+                    analysis_enabled=True,
+                    raw_payload_reference=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+        session.commit()
 
 
 def test_migration_creates_shared_schema_and_fts(tmp_path: Path) -> None:
@@ -315,6 +355,123 @@ topics:
             )
             == 2
         )
+
+
+def test_acronym_search_grouping_and_no_singleton_topic_fill(tmp_path: Path) -> None:
+    database_path = _migrated_database(tmp_path)
+    engine = create_sqlite_engine(database_path)
+    make_session = session_factory(engine)
+    _insert_analysis_events(
+        make_session,
+        [
+            "GIS QGIS geodata spatial data home assistant return def none path defaults",
+            "GIS QGIS geodata spatial data home assistant return def none path defaults",
+            "GIS QGIS geodata spatial data home assistant return def none path defaults",
+        ],
+    )
+    override_path = tmp_path / "topic-overrides.yaml"
+    override_path.write_text(
+        """
+topics:
+  - id: example_geodata
+    name: Example geodata topic
+    aliases: [gis, qgis, geodata, spatial data]
+    category: example
+""".strip(),
+        encoding="utf-8",
+    )
+    with make_session() as session:
+        result = build_topics(
+            session,
+            min_document_frequency=2,
+            max_topics=30,
+            overrides_path=override_path,
+        )
+    with make_session() as session:
+        lower = search_catalog(session, "gis", layer="all")
+        upper = search_catalog(session, "GIS", layer="all")
+        automatic_topics = session.scalars(
+            select(Topic).where(Topic.is_active.is_(True), Topic.origin == "automatic")
+        ).all()
+        code_topics = session.scalar(
+            select(func.count())
+            .select_from(Topic)
+            .where(
+                Topic.is_active.is_(True),
+                Topic.name.in_(("return", "def", "none", "path", "defaults")),
+            )
+        )
+        rejected_code = session.scalar(
+            select(func.count())
+            .select_from(CandidateTerm)
+            .where(CandidateTerm.rejection_reason == "code_token")
+        )
+        rejected_code_unigrams = session.scalar(
+            select(func.count())
+            .select_from(CandidateTerm)
+            .where(
+                CandidateTerm.rejection_reason == "code_token",
+                CandidateTerm.normalized_term.in_(("return", "def", "none", "path", "defaults")),
+            )
+        )
+
+    assert lower and upper
+    assert {item.name for item in lower} == {item.name for item in upper}
+    assert any(item.layer == "terms" for item in lower)
+    assert any(item.layer == "topics" for item in lower)
+    assert result.topics < 30
+    assert code_topics == 0
+    assert rejected_code >= 5
+    assert rejected_code_unigrams == 5
+    assert all(topic.name in {"gis", "qgis"} or " " in topic.name for topic in automatic_topics)
+
+
+def test_topic_graph_does_not_fill_node_limit_with_singletons(tmp_path: Path) -> None:
+    database_path = _migrated_database(tmp_path)
+    engine = create_sqlite_engine(database_path)
+    make_session = session_factory(engine)
+    _insert_analysis_events(
+        make_session,
+        [
+            "syntheticone",
+            "syntheticone",
+            "synthetictwo",
+            "synthetictwo",
+            "syntheticthree",
+            "syntheticthree",
+        ],
+    )
+    override_path = tmp_path / "three-topics.yaml"
+    override_path.write_text(
+        """
+topics:
+  - id: example_one
+    name: Example One
+    aliases: [syntheticone]
+    category: example
+  - id: example_two
+    name: Example Two
+    aliases: [synthetictwo]
+    category: example
+  - id: example_three
+    name: Example Three
+    aliases: [syntheticthree]
+    category: example
+""".strip(),
+        encoding="utf-8",
+    )
+    with make_session() as session:
+        result = build_topics(
+            session,
+            min_document_frequency=2,
+            max_topics=30,
+            overrides_path=override_path,
+        )
+    with make_session() as session:
+        graph = get_topic_graph(session, min_occurrences=1, node_limit=30)
+
+    assert result.topics == 3
+    assert len(graph.nodes) == 3
 
 
 def test_filters_and_limits_topic_graph(tmp_path: Path) -> None:
