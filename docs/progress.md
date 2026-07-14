@@ -514,4 +514,4 @@ Zoptymalizować pamięć ekstrakcji, a następnie dostroić heurystyki na podsta
 ### Commity
 
 - baza bloku: `1703ab7`;
-- końcowa walidacja i raport: commit zawierający tę sekcję.
+- końcowa walidacja i raport: `45d1097`.

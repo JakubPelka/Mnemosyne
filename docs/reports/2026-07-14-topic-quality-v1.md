@@ -92,4 +92,4 @@ Najpierw zoptymalizować pamięć ekstrakcji i przeprowadzić użytkową ocenę 
 - rozdzielenie kandydatów i tematów: `b691b21`;
 - API i diagnostyka: `ce10529`;
 - UI: `1703ab7`;
-- końcowa walidacja i ten raport: commit zawierający niniejszy plik.
+- końcowa walidacja i raport: `45d1097`.
