@@ -1,0 +1,8 @@
+topics:
+  - id: example_topic
+    name: Example Topic
+    aliases:
+      - example
+      - example phrase
+    category: example
+

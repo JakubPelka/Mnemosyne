@@ -1,4 +1,6 @@
 from backend.app.nlp.quality import assess_term, is_export_artifact, phrase_suppresses_unigram
+from backend.app.services.topic_overrides import load_topic_overrides
+from backend.app.services.topics import stable_term_id, stable_topic_id
 
 
 def quality(value: str, *, frequency: int = 5, documents: int = 100, tfidf: float = 2.0):
@@ -56,3 +58,29 @@ def test_keeps_characteristic_unigram_when_phrase_has_low_coverage() -> None:
         phrase_document_frequency=3,
         unigram_document_frequency=20,
     )
+
+
+def test_stable_term_and_topic_identifiers() -> None:
+    assert stable_term_id("Example Phrase") == stable_term_id("  example   phrase ")
+    assert stable_topic_id("example phrase") == stable_topic_id("example phrase")
+    assert stable_topic_id("example phrase", manual_id="example") != stable_topic_id(
+        "example phrase"
+    )
+
+
+def test_loads_safe_manual_alias_configuration(tmp_path) -> None:
+    path = tmp_path / "overrides.yaml"
+    path.write_text(
+        """
+topics:
+  - id: example_topic
+    name: Example Topic
+    aliases: [example, example phrase]
+    category: example
+""".strip(),
+        encoding="utf-8",
+    )
+    overrides = load_topic_overrides(path)
+    assert len(overrides) == 1
+    assert overrides[0].override_id == "example_topic"
+    assert overrides[0].aliases == ("example", "example phrase")

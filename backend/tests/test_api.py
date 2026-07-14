@@ -27,6 +27,7 @@ class ApiFixture:
     client: TestClient
     make_session: sessionmaker[Session]
     garden_id: str
+    topic_name: str
     target_event_id: str
 
 
@@ -43,11 +44,15 @@ def api_fixture(tmp_path: Path) -> Iterator[ApiFixture]:
     with make_session() as session:
         build_topics(session, min_document_frequency=1, max_topics=100, topics_per_event=5)
     with make_session() as session:
-        garden_id = session.scalar(select(Topic.topic_id).where(Topic.name == "garden"))
+        selected_topic = session.scalar(
+            select(Topic)
+            .where(Topic.name.contains("garden"), Topic.is_active.is_(True))
+            .order_by(Topic.name)
+        )
         target_event_id = session.scalar(
             select(ChatGPTMessageModel.event_id).where(ChatGPTMessageModel.message_id == "pl-user")
         )
-    assert garden_id is not None
+    assert selected_topic is not None
     assert target_event_id is not None
 
     def override_session() -> Iterator[Session]:
@@ -56,7 +61,9 @@ def api_fixture(tmp_path: Path) -> Iterator[ApiFixture]:
 
     app.dependency_overrides[get_session] = override_session
     with TestClient(app) as client:
-        yield ApiFixture(client, make_session, garden_id, target_event_id)
+        yield ApiFixture(
+            client, make_session, selected_topic.topic_id, selected_topic.name, target_event_id
+        )
     app.dependency_overrides.clear()
 
 
@@ -84,7 +91,7 @@ def test_meta_returns_only_structural_metadata(api_fixture: ApiFixture) -> None:
     body = response.json()
     assert body["api_version"] == "0.2.0"
     assert body["source_types"] == ["chatgpt"]
-    assert body["topic_categories"] == ["keyword"]
+    assert body["topic_categories"] == ["topic"]
     assert body["counts"]["events"] == 11
     assert body["counts"]["topics"] > 0
     assert body["counts"]["relations"] > 0
@@ -119,7 +126,7 @@ def test_graph_intensity_and_limited_context_api(api_fixture: ApiFixture) -> Non
 
 
 def test_topic_search_and_detail(api_fixture: ApiFixture) -> None:
-    search = api_fixture.client.get("/api/topics/search", params={"q": "gard", "limit": 5})
+    search = api_fixture.client.get("/api/topics/search", params={"q": "garden", "limit": 5})
     detail = api_fixture.client.get(f"/api/topics/{api_fixture.garden_id}")
     missing = api_fixture.client.get("/api/topics/not-a-topic")
 
@@ -127,7 +134,7 @@ def test_topic_search_and_detail(api_fixture: ApiFixture) -> None:
     assert any(item["topic_id"] == api_fixture.garden_id for item in search.json()["items"])
     assert detail.status_code == 200
     body = detail.json()
-    assert body["name"] == "garden"
+    assert body["name"] == api_fixture.topic_name
     assert body["message_count"] == 1
     assert body["context_count"] == 1
     assert body["months"][0]["month"] == "2024-03"

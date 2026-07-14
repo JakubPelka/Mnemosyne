@@ -87,6 +87,15 @@ class Topic(Base):
     topic_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     category: Mapped[str] = mapped_column(String(64), nullable=False, default="keyword")
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="active", server_default="active", index=True
+    )
+    origin: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="automatic", server_default="automatic"
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="1", index=True
+    )
     message_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
@@ -95,6 +104,63 @@ class Topic(Base):
     )
     first_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CandidateTerm(Base):
+    __tablename__ = "candidate_terms"
+    __table_args__ = (
+        UniqueConstraint("normalized_term"),
+        CheckConstraint("ngram_size >= 1 AND ngram_size <= 3", name="candidate_ngram_size"),
+        CheckConstraint(
+            "quality_status IN ('accepted', 'rejected', 'legacy')",
+            name="candidate_quality_status",
+        ),
+    )
+
+    term_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    term: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_term: Mapped[str] = mapped_column(Text, nullable=False)
+    ngram_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    language: Mapped[str | None] = mapped_column(String(16), index=True)
+    message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    context_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    document_frequency: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tfidf_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    quality_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    quality_status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    rejection_reason: Mapped[str | None] = mapped_column(String(64), index=True)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="1", index=True
+    )
+
+
+class TopicTerm(Base):
+    __tablename__ = "topic_terms"
+    __table_args__ = (
+        CheckConstraint(
+            "relation_type IN ('primary', 'alias', 'manual')", name="topic_term_relation_type"
+        ),
+    )
+
+    topic_id: Mapped[str] = mapped_column(
+        ForeignKey("topics.topic_id", ondelete="CASCADE"), primary_key=True
+    )
+    term_id: Mapped[str] = mapped_column(
+        ForeignKey("candidate_terms.term_id", ondelete="CASCADE"), primary_key=True
+    )
+    relation_type: Mapped[str] = mapped_column(String(32), nullable=False, default="alias")
+
+
+class EventCandidateTerm(Base):
+    __tablename__ = "event_candidate_terms"
+
+    event_id: Mapped[str] = mapped_column(
+        ForeignKey("events.event_id", ondelete="CASCADE"), primary_key=True
+    )
+    term_id: Mapped[str] = mapped_column(
+        ForeignKey("candidate_terms.term_id", ondelete="CASCADE"), primary_key=True
+    )
+    weight: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
 
 
 class EventTopic(Base):

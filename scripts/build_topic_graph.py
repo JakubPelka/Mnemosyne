@@ -18,7 +18,8 @@ def main() -> int:
         default=Path(os.getenv("MNEMOSYNE_DATABASE_PATH", "data/mnemosyne.sqlite3")),
     )
     parser.add_argument("--min-frequency", type=int, default=5)
-    parser.add_argument("--max-topics", type=int, default=500)
+    parser.add_argument("--max-candidate-terms", type=int, default=5000)
+    parser.add_argument("--max-topics", type=int, default=200)
     parser.add_argument("--topics-per-event", type=int, default=5)
     args = parser.parse_args()
 
@@ -28,6 +29,7 @@ def main() -> int:
         result = build_topics(
             session,
             min_document_frequency=args.min_frequency,
+            max_candidate_terms=args.max_candidate_terms,
             max_topics=args.max_topics,
             topics_per_event=args.topics_per_event,
         )
@@ -36,9 +38,14 @@ def main() -> int:
             {
                 "status": "completed",
                 "documents": result.documents,
+                "candidate_terms": result.candidate_terms,
+                "accepted_terms": result.accepted_terms,
+                "rejected_terms": result.rejected_terms,
                 "topics": result.topics,
+                "topic_terms": result.topic_terms,
                 "assignments": result.assignments,
                 "relations": result.relations,
+                "rejection_counts": result.rejection_counts,
             }
         )
     )

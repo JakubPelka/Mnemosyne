@@ -95,13 +95,21 @@ def get_catalog_meta(session: Session) -> CatalogMeta:
         .where(active)
         .order_by(Source.source_type)
     ).all()
-    categories = session.scalars(select(distinct(Topic.category)).order_by(Topic.category)).all()
+    categories = session.scalars(
+        select(distinct(Topic.category)).where(Topic.is_active.is_(True)).order_by(Topic.category)
+    ).all()
     topic_count = session.scalar(
         select(func.count(distinct(EventTopic.topic_id)))
         .join(Event, Event.event_id == EventTopic.event_id)
-        .where(active)
+        .join(Topic, Topic.topic_id == EventTopic.topic_id)
+        .where(active, Topic.is_active.is_(True))
     )
-    relation_count = session.scalar(select(func.count()).select_from(TopicRelation))
+    relation_count = session.scalar(
+        select(func.count())
+        .select_from(TopicRelation)
+        .join(Topic, Topic.topic_id == TopicRelation.source_topic_id)
+        .where(Topic.is_active.is_(True))
+    )
     return CatalogMeta(
         earliest_event_at=earliest,
         latest_event_at=latest,
@@ -136,6 +144,7 @@ def search_topics(
         .where(
             Event.is_active.is_(True),
             Event.privacy_level == privacy_level,
+            Topic.is_active.is_(True),
             Topic.name.ilike(pattern, escape="\\"),
         )
         .group_by(Topic.topic_id, Topic.name, Topic.category)
@@ -153,7 +162,7 @@ def get_topic_detail(
     neighbor_limit: int = 12,
 ) -> TopicDetail | None:
     topic = session.get(Topic, topic_id)
-    if topic is None:
+    if topic is None or not topic.is_active:
         return None
 
     summary_row = session.execute(
@@ -204,7 +213,8 @@ def get_topic_occurrences(
     limit: int = 20,
     offset: int = 0,
 ) -> EventExcerptPage | None:
-    if session.get(Topic, topic_id) is None:
+    topic = session.get(Topic, topic_id)
+    if topic is None or not topic.is_active:
         return None
     filters = [
         EventTopic.topic_id == topic_id,
@@ -327,6 +337,7 @@ def _topic_neighbors(
             EventTopic.topic_id != topic_id,
             Event.is_active.is_(True),
             Event.privacy_level == privacy_level,
+            Topic.is_active.is_(True),
         )
     )
     metadata: dict[str, tuple[str, str]] = {}

@@ -3,8 +3,10 @@
 from .base import Base
 from .chatgpt import ChatGPTConversationModel, ChatGPTMessageModel
 from .core import (
+    CandidateTerm,
     Entity,
     Event,
+    EventCandidateTerm,
     EventEntity,
     EventRelation,
     EventTopic,
@@ -12,14 +14,17 @@ from .core import (
     Source,
     Topic,
     TopicRelation,
+    TopicTerm,
 )
 
 __all__ = [
     "Base",
     "ChatGPTConversationModel",
     "ChatGPTMessageModel",
+    "CandidateTerm",
     "Entity",
     "Event",
+    "EventCandidateTerm",
     "EventEntity",
     "EventRelation",
     "EventTopic",
@@ -27,4 +32,5 @@ __all__ = [
     "Source",
     "Topic",
     "TopicRelation",
+    "TopicTerm",
 ]

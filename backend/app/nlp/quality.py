@@ -86,7 +86,7 @@ def assess_term(
         reason = "too_short"
     elif all(token in ALL_STOPWORDS for token in tokens):
         reason = "stopword"
-    elif document_count and document_frequency / document_count > max_document_ratio:
+    elif document_count >= 50 and document_frequency / document_count > max_document_ratio:
         reason = "too_common"
     elif document_frequency < min_document_frequency or tfidf_score <= 0:
         reason = "low_information"

@@ -8,40 +8,44 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import combinations
+from pathlib import Path
 
-from sqlalchemy import delete, func, insert, select
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import Session
 
-from backend.app.models import Event, EventTopic, Topic, TopicRelation
-
-_WORD_PATTERN = re.compile(r"[^\W\d_]{3,}", re.UNICODE)
-_STOPWORDS = frozenset(
-    """
-    a about after again against all also am an and any are as at be because been before being
-    between both but by can could did do does doing down during each few for from further had
-    has have having he her here hers herself him himself his how i if in into is it its itself
-    just me more most my myself no nor not now of off on once only or other our ours ourselves
-    out over own same she should so some such than that the their theirs them themselves then
-    there these they this those through to too under until up very was we were what when where
-    which while who whom why will with would you your yours yourself yourselves
-    
-    aby albo ale ani aż bez bo być ci co czy dla do gdy gdzie go i ich im inna inne jest jeśli
-    już kiedy kto która które który ma mi mnie może na nad nam nas nie niż o od oraz po pod przez
-    przy są się ta tak także tam te tego tej ten to tu tych tym tylko w we więc z za ze że
-    
-    alla allt att av blev bli blir det detta du då en ett eller för från ha hade han har hon hur
-    här i inte jag kan med men mot mycket när och om på samma sig sin sina som till under upp ur
-    vad var vara vi vid vilken vilka än är även över
-    """.split()
+from backend.app.models import (
+    CandidateTerm,
+    Event,
+    EventCandidateTerm,
+    EventTopic,
+    Topic,
+    TopicRelation,
+    TopicTerm,
 )
+from backend.app.nlp.quality import (
+    TermQuality,
+    assess_term,
+    normalize_term,
+    phrase_suppresses_unigram,
+    term_tokens,
+)
+from backend.app.services.topic_overrides import TopicOverride, load_topic_overrides
+
+_TEXT_TOKEN_PATTERN = re.compile(r"[^\W_]+(?:[-+.#][^\W_]+)*", re.UNICODE)
 
 
 @dataclass(frozen=True, slots=True)
 class TopicBuildResult:
     documents: int
+    candidate_terms: int
+    accepted_terms: int
+    rejected_terms: int
     topics: int
+    topic_terms: int
     assignments: int
     relations: int
+    rejection_counts: dict[str, int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,144 +63,118 @@ class _Document:
     terms: Counter[str]
 
 
+@dataclass(frozen=True, slots=True)
+class _CandidateMetrics:
+    term: str
+    document_frequency: int
+    context_count: int
+    tfidf_score: float
+    quality: TermQuality
+
+
+@dataclass(frozen=True, slots=True)
+class _TopicDefinition:
+    topic_id: str
+    name: str
+    category: str
+    origin: str
+    primary_term: str
+    aliases: tuple[str, ...]
+
+
 def build_topics(
     session: Session,
     *,
     min_document_frequency: int = 5,
-    max_topics: int = 500,
+    max_candidate_terms: int = 5000,
+    max_topics: int = 200,
     topics_per_event: int = 5,
+    candidate_terms_per_event: int = 20,
+    include_trigrams: bool = True,
+    overrides_path: Path | None = None,
 ) -> TopicBuildResult:
-    """Build a deterministic local keyword graph from analysis-enabled events."""
+    """Build explainable candidate terms and a separate local topic layer."""
 
-    if min_document_frequency < 1 or max_topics < 1 or topics_per_event < 1:
+    if (
+        min(
+            min_document_frequency,
+            max_candidate_terms,
+            max_topics,
+            topics_per_event,
+            candidate_terms_per_event,
+        )
+        < 1
+    ):
         raise ValueError("topic_build_limits_must_be_positive")
 
-    rows = session.execute(
-        select(Event.event_id, Event.context_id, Event.timestamp_start, Event.text).where(
-            Event.is_active.is_(True),
-            Event.analysis_enabled.is_(True),
-            Event.text.is_not(None),
-        )
-    )
-    documents: list[_Document] = []
+    documents = _load_documents(session, include_trigrams=include_trigrams)
     document_frequency: Counter[str] = Counter()
-    for event_id, context_id, timestamp, text in rows:
-        terms = _term_counts(text)
-        if not terms:
-            continue
-        document = _Document(event_id, context_id or event_id, timestamp, terms)
-        documents.append(document)
-        document_frequency.update(terms)
-
-    selected_terms = {
-        term
-        for term, _frequency in sorted(
-            (
-                (term, frequency)
-                for term, frequency in document_frequency.items()
-                if frequency >= min_document_frequency
-            ),
-            key=lambda item: (-item[1], -item[0].count(" "), item[0]),
-        )[:max_topics]
-    }
-
-    session.execute(delete(TopicRelation))
-    session.execute(delete(EventTopic))
-    session.execute(delete(Topic).where(Topic.category == "keyword"))
-    if not selected_terms:
-        session.commit()
-        return TopicBuildResult(len(documents), 0, 0, 0)
-
-    topic_ids = {term: _topic_id(term) for term in selected_terms}
-    topic_documents: Counter[str] = Counter()
-    topic_contexts: dict[str, set[str]] = defaultdict(set)
-    first_seen: dict[str, datetime] = {}
-    last_seen: dict[str, datetime] = {}
-    assignments: list[dict[str, object]] = []
-    document_topics: list[tuple[_Document, tuple[str, ...]]] = []
-    document_count = len(documents)
-
+    term_contexts: dict[str, set[str]] = defaultdict(set)
+    total_term_score: Counter[str] = Counter()
     for document in documents:
-        ranked = []
+        for term in document.terms:
+            document_frequency[term] += 1
+            term_contexts[term].add(document.context_id)
+
+    overrides = load_topic_overrides(overrides_path)
+    manual_aliases = {alias for override in overrides for alias in override.aliases}
+    ranked_terms = sorted(
+        document_frequency,
+        key=lambda term: (-document_frequency[term], -term.count(" "), term),
+    )[:max_candidate_terms]
+    selected_terms = set(ranked_terms) | manual_aliases
+    document_count = len(documents)
+    for document in documents:
         for term, frequency in document.terms.items():
             if term not in selected_terms:
                 continue
-            inverse_frequency = (
-                math.log((document_count + 1) / (document_frequency[term] + 1)) + 1.0
+            total_term_score[term] += frequency * _inverse_document_frequency(
+                document_count, document_frequency[term]
             )
-            ngram_bonus = 1.2 if " " in term else 1.0
-            ranked.append((frequency * inverse_frequency * ngram_bonus, term))
-        chosen = tuple(
-            term
-            for _score, term in sorted(ranked, key=lambda item: (-item[0], item[1]))[
-                :topics_per_event
-            ]
-        )
-        if not chosen:
-            continue
-        document_topics.append((document, chosen))
-        for term in chosen:
-            topic_id = topic_ids[term]
-            score = next(score for score, candidate in ranked if candidate == term)
-            assignments.append(
-                {"event_id": document.event_id, "topic_id": topic_id, "weight": score}
-            )
-            topic_documents[term] += 1
-            topic_contexts[term].add(document.context_id)
-            if document.timestamp is not None:
-                first_seen[term] = min(first_seen.get(term, document.timestamp), document.timestamp)
-                last_seen[term] = max(last_seen.get(term, document.timestamp), document.timestamp)
 
-    topic_rows = [
-        {
-            "topic_id": topic_ids[term],
-            "name": term,
-            "category": "keyword",
-            "message_count": topic_documents[term],
-            "conversation_count": len(topic_contexts[term]),
-            "first_seen_at": first_seen.get(term),
-            "last_seen_at": last_seen.get(term),
-        }
-        for term in sorted(selected_terms)
-        if topic_documents[term]
-    ]
-    if topic_rows:
-        session.execute(insert(Topic), topic_rows)
-    if assignments:
-        session.execute(insert(EventTopic), assignments)
+    metrics = _candidate_metrics(
+        selected_terms,
+        document_frequency=document_frequency,
+        term_contexts=term_contexts,
+        total_term_score=total_term_score,
+        document_count=document_count,
+        min_document_frequency=min_document_frequency,
+        manual_aliases=manual_aliases,
+    )
+    _persist_candidates(session, metrics)
+    candidate_assignments = _candidate_assignments(
+        documents,
+        metrics,
+        candidate_terms_per_event=candidate_terms_per_event,
+    )
+    session.execute(delete(EventCandidateTerm))
+    if candidate_assignments:
+        session.execute(insert(EventCandidateTerm), candidate_assignments)
 
-    message_pairs: Counter[tuple[str, str]] = Counter()
-    pair_contexts: dict[tuple[str, str], set[str]] = defaultdict(set)
-    for document, terms in document_topics:
-        for first, second in combinations(sorted(set(terms)), 2):
-            pair = (topic_ids[first], topic_ids[second])
-            message_pairs[pair] += 1
-            pair_contexts[pair].add(document.context_id)
-
-    relation_rows = []
-    topic_frequency_by_id = {topic_ids[term]: topic_documents[term] for term in selected_terms}
-    for (source_topic_id, target_topic_id), message_count in sorted(message_pairs.items()):
-        denominator = math.sqrt(
-            topic_frequency_by_id[source_topic_id] * topic_frequency_by_id[target_topic_id]
-        )
-        relation_rows.append(
-            {
-                "relation_id": _relation_id(source_topic_id, target_topic_id),
-                "source_topic_id": source_topic_id,
-                "target_topic_id": target_topic_id,
-                "message_count": message_count,
-                "conversation_count": len(pair_contexts[(source_topic_id, target_topic_id)]),
-                "weight": message_count / denominator if denominator else 0.0,
-            }
-        )
-    if relation_rows:
-        session.execute(insert(TopicRelation), relation_rows)
+    definitions = _build_topic_definitions(metrics, overrides=overrides, max_topics=max_topics)
+    result = _persist_topic_layer(
+        session,
+        documents=documents,
+        metrics=metrics,
+        definitions=definitions,
+        topics_per_event=topics_per_event,
+    )
     session.commit()
+    rejection_counts = Counter(
+        metric.quality.rejection_reason
+        for metric in metrics.values()
+        if metric.quality.rejection_reason is not None
+    )
     return TopicBuildResult(
-        documents=len(documents),
-        topics=len(topic_rows),
-        assignments=len(assignments),
-        relations=len(relation_rows),
+        documents=document_count,
+        candidate_terms=len(metrics),
+        accepted_terms=sum(metric.quality.status == "accepted" for metric in metrics.values()),
+        rejected_terms=sum(metric.quality.status == "rejected" for metric in metrics.values()),
+        topics=result[0],
+        topic_terms=result[1],
+        assignments=result[2],
+        relations=result[3],
+        rejection_counts=dict(sorted(rejection_counts.items())),
     )
 
 
@@ -228,20 +206,414 @@ def topic_monthly_intensity(
     )
 
 
-def _term_counts(text: str) -> Counter[str]:
+def stable_term_id(term: str) -> str:
+    normalized = normalize_term(term)
+    return f"term-{hashlib.sha256(normalized.encode()).hexdigest()}"
+
+
+def stable_topic_id(canonical_name: str, *, manual_id: str | None = None) -> str:
+    namespace = f"manual:{manual_id}" if manual_id else f"automatic:{canonical_name}"
+    return f"topic-{hashlib.sha256(namespace.encode()).hexdigest()}"
+
+
+def extract_candidate_terms(text: str, *, include_trigrams: bool = True) -> Counter[str]:
     normalized = unicodedata.normalize("NFKC", text).casefold()
-    tokens = [token for token in _WORD_PATTERN.findall(normalized) if token not in _STOPWORDS]
+    tokens = _TEXT_TOKEN_PATTERN.findall(normalized)
     terms: Counter[str] = Counter(tokens)
     terms.update(
-        f"{first} {second}"
-        for first, second in zip(tokens, tokens[1:], strict=False)
-        if first != second
+        " ".join(tokens[index : index + 2])
+        for index in range(max(0, len(tokens) - 1))
+        if tokens[index] != tokens[index + 1]
     )
+    if include_trigrams:
+        terms.update(
+            " ".join(tokens[index : index + 3])
+            for index in range(max(0, len(tokens) - 2))
+            if len(set(tokens[index : index + 3])) > 1
+        )
     return terms
 
 
-def _topic_id(term: str) -> str:
-    return f"topic-{hashlib.sha256(term.encode()).hexdigest()}"
+def _load_documents(session: Session, *, include_trigrams: bool) -> list[_Document]:
+    rows = session.execute(
+        select(Event.event_id, Event.context_id, Event.timestamp_start, Event.text).where(
+            Event.is_active.is_(True),
+            Event.analysis_enabled.is_(True),
+            Event.text.is_not(None),
+        )
+    )
+    return [
+        _Document(
+            event_id=event_id,
+            context_id=context_id or event_id,
+            timestamp=timestamp,
+            terms=extract_candidate_terms(text, include_trigrams=include_trigrams),
+        )
+        for event_id, context_id, timestamp, text in rows
+        if text and text.strip()
+    ]
+
+
+def _candidate_metrics(
+    selected_terms: set[str],
+    *,
+    document_frequency: Counter[str],
+    term_contexts: dict[str, set[str]],
+    total_term_score: Counter[str],
+    document_count: int,
+    min_document_frequency: int,
+    manual_aliases: set[str],
+) -> dict[str, _CandidateMetrics]:
+    result = {}
+    for term in sorted(selected_terms):
+        frequency = document_frequency[term]
+        tfidf_score = total_term_score[term] / max(1, frequency)
+        quality = assess_term(
+            term,
+            document_frequency=frequency,
+            document_count=document_count,
+            tfidf_score=tfidf_score,
+            min_document_frequency=min_document_frequency,
+        )
+        if term in manual_aliases:
+            quality = TermQuality(
+                normalized_term=quality.normalized_term,
+                ngram_size=max(1, quality.ngram_size),
+                language=quality.language,
+                score=max(quality.score, 1.0),
+                status="accepted",
+                rejection_reason=None,
+            )
+        result[term] = _CandidateMetrics(
+            term=term,
+            document_frequency=frequency,
+            context_count=len(term_contexts[term]),
+            tfidf_score=tfidf_score,
+            quality=quality,
+        )
+    return result
+
+
+def _persist_candidates(session: Session, metrics: dict[str, _CandidateMetrics]) -> None:
+    session.execute(update(CandidateTerm).values(is_active=False))
+    rows = [
+        {
+            "term_id": stable_term_id(term),
+            "term": metric.term,
+            "normalized_term": metric.quality.normalized_term,
+            "ngram_size": metric.quality.ngram_size,
+            "language": metric.quality.language,
+            "message_count": metric.document_frequency,
+            "context_count": metric.context_count,
+            "document_frequency": metric.document_frequency,
+            "tfidf_score": metric.tfidf_score,
+            "quality_score": metric.quality.score,
+            "quality_status": metric.quality.status,
+            "rejection_reason": metric.quality.rejection_reason,
+            "is_active": metric.quality.status == "accepted",
+        }
+        for term, metric in metrics.items()
+    ]
+    if not rows:
+        return
+    statement = insert(CandidateTerm).values(rows)
+    session.execute(
+        statement.on_conflict_do_update(
+            index_elements=[CandidateTerm.term_id],
+            set_={
+                column: getattr(statement.excluded, column)
+                for column in (
+                    "term",
+                    "normalized_term",
+                    "ngram_size",
+                    "language",
+                    "message_count",
+                    "context_count",
+                    "document_frequency",
+                    "tfidf_score",
+                    "quality_score",
+                    "quality_status",
+                    "rejection_reason",
+                    "is_active",
+                )
+            },
+        )
+    )
+
+
+def _candidate_assignments(
+    documents: list[_Document],
+    metrics: dict[str, _CandidateMetrics],
+    *,
+    candidate_terms_per_event: int,
+) -> list[dict[str, object]]:
+    rows = []
+    for document in documents:
+        ranked = sorted(
+            (
+                (
+                    frequency
+                    * _inverse_document_frequency(len(documents), metric.document_frequency),
+                    term,
+                )
+                for term, frequency in document.terms.items()
+                if (metric := metrics.get(term)) is not None
+            ),
+            key=lambda item: (-item[0], -item[1].count(" "), item[1]),
+        )[:candidate_terms_per_event]
+        rows.extend(
+            {"event_id": document.event_id, "term_id": stable_term_id(term), "weight": score}
+            for score, term in ranked
+        )
+    return rows
+
+
+def _build_topic_definitions(
+    metrics: dict[str, _CandidateMetrics],
+    *,
+    overrides: tuple[TopicOverride, ...],
+    max_topics: int,
+) -> tuple[_TopicDefinition, ...]:
+    definitions: list[_TopicDefinition] = []
+    manually_mapped: set[str] = set()
+    for override in overrides:
+        manually_mapped.update(override.aliases)
+        definitions.append(
+            _TopicDefinition(
+                topic_id=stable_topic_id(override.name, manual_id=override.override_id),
+                name=override.name,
+                category=override.category,
+                origin="manual",
+                primary_term=override.aliases[0],
+                aliases=override.aliases,
+            )
+        )
+
+    accepted = {
+        term: metric for term, metric in metrics.items() if metric.quality.status == "accepted"
+    }
+    suppressed: set[str] = set()
+    phrase_aliases: dict[str, set[str]] = defaultdict(set)
+    phrases = sorted(
+        (item for item in accepted.items() if item[1].quality.ngram_size >= 2),
+        key=lambda item: (-item[1].quality.score, item[0]),
+    )
+    for phrase, phrase_metric in phrases:
+        for token in term_tokens(phrase):
+            unigram_metric = accepted.get(token)
+            if unigram_metric and phrase_suppresses_unigram(
+                phrase_metric.quality,
+                unigram_metric.quality,
+                phrase_document_frequency=phrase_metric.document_frequency,
+                unigram_document_frequency=unigram_metric.document_frequency,
+            ):
+                suppressed.add(token)
+                if (
+                    phrase_metric.document_frequency / max(1, unigram_metric.document_frequency)
+                    >= 0.6
+                ):
+                    phrase_aliases[phrase].add(token)
+
+    groups: dict[str, list[str]] = defaultdict(list)
+    for term, metric in accepted.items():
+        if term in manually_mapped or term in suppressed:
+            continue
+        groups[_canonical_variant(term)].append(term)
+    ranked_groups = sorted(
+        groups.items(),
+        key=lambda item: (
+            -max(accepted[term].quality.score for term in item[1]),
+            -max(accepted[term].quality.ngram_size for term in item[1]),
+            item[0],
+        ),
+    )
+    automatic_limit = max(0, max_topics - len(definitions))
+    for canonical, terms in ranked_groups[:automatic_limit]:
+        ranked = sorted(
+            terms,
+            key=lambda term: (
+                -accepted[term].quality.score,
+                -accepted[term].quality.ngram_size,
+                term,
+            ),
+        )
+        primary = ranked[0]
+        aliases = tuple(dict.fromkeys([*ranked, *sorted(phrase_aliases.get(primary, set()))]))
+        definitions.append(
+            _TopicDefinition(
+                topic_id=stable_topic_id(canonical),
+                name=primary,
+                category="topic",
+                origin="automatic",
+                primary_term=primary,
+                aliases=aliases,
+            )
+        )
+    return tuple(definitions)
+
+
+def _persist_topic_layer(
+    session: Session,
+    *,
+    documents: list[_Document],
+    metrics: dict[str, _CandidateMetrics],
+    definitions: tuple[_TopicDefinition, ...],
+    topics_per_event: int,
+) -> tuple[int, int, int, int]:
+    session.execute(delete(TopicRelation))
+    session.execute(delete(EventTopic))
+    session.execute(delete(TopicTerm))
+    session.execute(update(Topic).values(status="archived", is_active=False))
+
+    term_to_topics: dict[str, list[str]] = defaultdict(list)
+    topic_terms = []
+    for definition in definitions:
+        for alias in definition.aliases:
+            if alias not in metrics:
+                continue
+            term_to_topics[alias].append(definition.topic_id)
+            topic_terms.append(
+                {
+                    "topic_id": definition.topic_id,
+                    "term_id": stable_term_id(alias),
+                    "relation_type": (
+                        "manual"
+                        if definition.origin == "manual"
+                        else "primary"
+                        if alias == definition.primary_term
+                        else "alias"
+                    ),
+                }
+            )
+
+    topic_events: Counter[str] = Counter()
+    topic_contexts: dict[str, set[str]] = defaultdict(set)
+    first_seen: dict[str, datetime] = {}
+    last_seen: dict[str, datetime] = {}
+    event_topic_rows = []
+    document_topics: list[tuple[_Document, tuple[str, ...]]] = []
+    for document in documents:
+        scores: dict[str, float] = {}
+        for term, frequency in document.terms.items():
+            metric = metrics.get(term)
+            if metric is None:
+                continue
+            score = frequency * _inverse_document_frequency(
+                len(documents), metric.document_frequency
+            )
+            for topic_id in term_to_topics.get(term, []):
+                scores[topic_id] = max(scores.get(topic_id, 0.0), score)
+        chosen = tuple(
+            topic_id
+            for topic_id, _score in sorted(scores.items(), key=lambda item: (-item[1], item[0]))[
+                :topics_per_event
+            ]
+        )
+        if not chosen:
+            continue
+        document_topics.append((document, chosen))
+        for topic_id in chosen:
+            event_topic_rows.append(
+                {"event_id": document.event_id, "topic_id": topic_id, "weight": scores[topic_id]}
+            )
+            topic_events[topic_id] += 1
+            topic_contexts[topic_id].add(document.context_id)
+            if document.timestamp is not None:
+                first_seen[topic_id] = min(
+                    first_seen.get(topic_id, document.timestamp), document.timestamp
+                )
+                last_seen[topic_id] = max(
+                    last_seen.get(topic_id, document.timestamp), document.timestamp
+                )
+
+    topic_rows = [
+        {
+            "topic_id": definition.topic_id,
+            "name": definition.name,
+            "category": definition.category,
+            "status": "active",
+            "origin": definition.origin,
+            "is_active": True,
+            "message_count": topic_events[definition.topic_id],
+            "conversation_count": len(topic_contexts[definition.topic_id]),
+            "first_seen_at": first_seen.get(definition.topic_id),
+            "last_seen_at": last_seen.get(definition.topic_id),
+        }
+        for definition in definitions
+        if topic_events[definition.topic_id] or definition.origin == "manual"
+    ]
+    active_topic_ids = {row["topic_id"] for row in topic_rows}
+    topic_terms = [row for row in topic_terms if row["topic_id"] in active_topic_ids]
+    event_topic_rows = [row for row in event_topic_rows if row["topic_id"] in active_topic_ids]
+    if topic_rows:
+        statement = insert(Topic).values(topic_rows)
+        session.execute(
+            statement.on_conflict_do_update(
+                index_elements=[Topic.topic_id],
+                set_={
+                    column: getattr(statement.excluded, column)
+                    for column in (
+                        "name",
+                        "category",
+                        "status",
+                        "origin",
+                        "is_active",
+                        "message_count",
+                        "conversation_count",
+                        "first_seen_at",
+                        "last_seen_at",
+                    )
+                },
+            )
+        )
+    if topic_terms:
+        session.execute(insert(TopicTerm), topic_terms)
+    if event_topic_rows:
+        session.execute(insert(EventTopic), event_topic_rows)
+
+    message_pairs: Counter[tuple[str, str]] = Counter()
+    pair_contexts: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for document, assigned_topics in document_topics:
+        visible = sorted(set(assigned_topics) & active_topic_ids)
+        for pair in combinations(visible, 2):
+            message_pairs[pair] += 1
+            pair_contexts[pair].add(document.context_id)
+    relation_rows = []
+    for (source_id, target_id), message_count in sorted(message_pairs.items()):
+        denominator = math.sqrt(topic_events[source_id] * topic_events[target_id])
+        relation_rows.append(
+            {
+                "relation_id": _relation_id(source_id, target_id),
+                "source_topic_id": source_id,
+                "target_topic_id": target_id,
+                "message_count": message_count,
+                "conversation_count": len(pair_contexts[(source_id, target_id)]),
+                "weight": message_count / denominator if denominator else 0.0,
+            }
+        )
+    if relation_rows:
+        session.execute(insert(TopicRelation), relation_rows)
+    return len(topic_rows), len(topic_terms), len(event_topic_rows), len(relation_rows)
+
+
+def _inverse_document_frequency(document_count: int, frequency: int) -> float:
+    return math.log((document_count + 1) / (frequency + 1)) + 1.0
+
+
+def _canonical_variant(term: str) -> str:
+    tokens = list(term_tokens(term))
+    canonical = [_simple_stem(token) for token in tokens]
+    return " ".join(canonical)
+
+
+def _simple_stem(token: str) -> str:
+    if len(token) > 5 and token.endswith("ies"):
+        return f"{token[:-3]}y"
+    if len(token) > 5 and token.endswith(("ers", "ens")):
+        return token[:-1]
+    if len(token) > 4 and token.endswith("s") and not token.endswith("ss"):
+        return token[:-1]
+    return token
 
 
 def _relation_id(source_topic_id: str, target_topic_id: str) -> str:

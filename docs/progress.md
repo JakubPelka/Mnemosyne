@@ -331,4 +331,54 @@ Po użytkowej ocenie atlasu dostroić stopwords i progi tematów na podstawie ob
 ### Commity
 
 - baza bloku: `71db4b2`;
+- filtry jakości kandydatów: `7b9282c`.
+
+## 2026-07-14 — Rozdzielenie kandydatów i tematów
+
+### Wykonane zadania
+
+- dodano trwałe modele `CandidateTerm`, `TopicTerm` i `EventCandidateTerm`;
+- rozszerzono `Topic` o status, pochodzenie i aktywność;
+- przygotowano migrację zachowującą stare terminy i przypisania;
+- przebudowano analizę na dwa etapy: kandydaci z oceną jakości oraz prezentacyjne tematy;
+- dodano preferowanie fraz, proste grupowanie wariantów i idempotentną ponowną budowę;
+- dodano bezpieczny format ręcznych tematów oraz ignorowane lokalne nadpisania;
+- udokumentowano decyzję w ADR 0006.
+
+### Zmienione pliki
+
+- `backend/app/models/core.py`, `backend/app/models/__init__.py`;
+- `backend/app/services/topics.py`, `backend/app/services/topic_overrides.py`;
+- `backend/migrations/versions/703c9442f139_separate_candidate_terms_from_topics.py`;
+- `scripts/build_topic_graph.py`, `sample_data/topic_overrides.example.yaml`;
+- `backend/tests/test_database_import.py`, `backend/tests/test_topic_quality.py`, `backend/tests/test_api.py`;
+- `docs/architecture.md`, `docs/adr/0006-candidate-terms-and-presented-topics.md`.
+
+### Testy i wyniki
+
+- `ruff check backend scripts`: zaliczone;
+- testy jakości, migracji, przebudowy i dotychczasowego API: 24 zaliczone;
+- migracja zachowuje syntetyczne rekordy starego schematu i ich przypisania;
+- druga przebudowa nie tworzy duplikatów.
+
+### Decyzje techniczne
+
+- odrzucone terminy pozostają w bazie jako nieaktywne wraz z głównym powodem odrzucenia;
+- stabilne identyfikatory powstają z postaci znormalizowanej lub jawnego identyfikatora ręcznego;
+- ręczne aliasy mogą promować termin niezależnie od automatycznego filtra;
+- plik `data/local_topic_overrides.yaml` pozostaje objęty ogólną regułą ignorowania `data/*`.
+
+### Znane ograniczenia i otwarte kwestie
+
+- grupowanie wariantów jest konserwatywną heurystyką, nie pełną lematyzacją;
+- jakość progów wymaga jeszcze pomiaru na lokalnej bazie po domknięciu API i UI;
+- rzeczywista baza nie została jeszcze zmigrowana ani przebudowana.
+
+### Następny krok
+
+Udostępnić terminy tematu oraz diagnostyczny graf kandydatów w typowanym API.
+
+### Commity
+
+- baza bloku: `7b9282c`;
 - bieżący blok: oczekuje na commit.

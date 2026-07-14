@@ -70,7 +70,11 @@ def get_topic_graph(
         .join(EventTopic, EventTopic.event_id == Event.event_id)
         .join(Topic, Topic.topic_id == EventTopic.topic_id)
         .join(Source, Source.source_id == Event.source_id)
-        .where(Event.is_active.is_(True), Event.privacy_level == privacy_level)
+        .where(
+            Event.is_active.is_(True),
+            Event.privacy_level == privacy_level,
+            Topic.is_active.is_(True),
+        )
     )
     if start is not None:
         statement = statement.where(Event.timestamp_start >= start)

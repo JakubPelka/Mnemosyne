@@ -8,13 +8,16 @@ from sqlalchemy import func, select, text
 
 from backend.app.database import create_sqlite_engine, session_factory, sqlite_url
 from backend.app.models import (
+    CandidateTerm,
     ChatGPTConversationModel,
     ChatGPTMessageModel,
     Event,
+    EventCandidateTerm,
     ImportRun,
     Source,
     Topic,
     EventTopic,
+    TopicTerm,
 )
 from backend.app.services.context import get_message_context
 from backend.app.services.graph import get_topic_graph
@@ -62,6 +65,9 @@ def test_migration_creates_shared_schema_and_fts(tmp_path: Path) -> None:
         "chatgpt_conversations",
         "chatgpt_messages",
         "events_fts",
+        "candidate_terms",
+        "event_candidate_terms",
+        "topic_terms",
     } <= tables
 
 
@@ -83,6 +89,57 @@ def test_second_revision_upgrades_an_existing_database(tmp_path: Path) -> None:
         )
     assert {"is_active", "analysis_enabled", "context_id"} <= after
     assert relation_table == 1
+
+
+def test_candidate_term_migration_preserves_existing_topic_assignments(tmp_path: Path) -> None:
+    database_path = tmp_path / "legacy-topics.sqlite3"
+    config = _alembic_config(database_path)
+    command.upgrade(config, "f9a405ee6284")
+    engine = create_sqlite_engine(database_path)
+    now = "2024-01-01 00:00:00"
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO sources (source_id, source_type, name, imported_at, "
+                "original_path_hash, metadata) VALUES "
+                "('source-synthetic', 'chatgpt', 'Synthetic', :now, 'hash', '{}')"
+            ),
+            {"now": now},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO events (event_id, source_id, source_record_id, event_type, "
+                "context_id, privacy_level, is_active, analysis_enabled, created_at, updated_at) "
+                "VALUES ('event-synthetic', 'source-synthetic', 'record-synthetic', "
+                "'message', 'context-synthetic', 'private', 1, 1, :now, :now)"
+            ),
+            {"now": now},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO topics (topic_id, name, category, message_count, "
+                "conversation_count) VALUES "
+                "('topic-synthetic', 'synthetic phrase', 'keyword', 1, 1)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO event_topics (event_id, topic_id, weight) "
+                "VALUES ('event-synthetic', 'topic-synthetic', 2.0)"
+            )
+        )
+
+    command.upgrade(config, "head")
+    with engine.connect() as connection:
+        assert connection.scalar(text("SELECT count(*) FROM candidate_terms")) == 1
+        assert connection.scalar(text("SELECT count(*) FROM topic_terms")) == 1
+        assert connection.scalar(text("SELECT count(*) FROM event_candidate_terms")) == 1
+        assert (
+            connection.scalar(
+                text("SELECT count(*) FROM topics WHERE origin = 'legacy' AND is_active = 1")
+            )
+            == 1
+        )
 
 
 def test_reimport_is_idempotent_and_searchable(tmp_path: Path) -> None:
@@ -161,13 +218,36 @@ def test_builds_local_topics_relations_and_monthly_intensity(tmp_path: Path) -> 
         result = build_topics(session, min_document_frequency=1, max_topics=100, topics_per_event=5)
 
     assert result.documents == 5
+    assert result.candidate_terms > result.topics
+    assert result.accepted_terms > 0
+    assert result.rejected_terms > 0
     assert result.topics > 0
     assert result.assignments > 0
     assert result.relations > 0
 
     with make_session() as session:
-        garden = session.scalar(select(Topic).where(Topic.name == "garden"))
+        garden = session.scalar(
+            select(Topic)
+            .where(Topic.name.contains("garden"), Topic.is_active.is_(True))
+            .order_by(Topic.name)
+        )
         assert garden is not None
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(Topic)
+                .where(Topic.name == "garden", Topic.is_active.is_(True))
+            )
+            == 0
+        )
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(CandidateTerm)
+                .where(CandidateTerm.normalized_term == "garden")
+            )
+            == 1
+        )
         intensity = topic_monthly_intensity(session, garden.topic_id)
         assert [(item.month, item.message_count) for item in intensity] == [("2024-03", 1)]
         excluded_assignments = session.scalar(
@@ -177,6 +257,64 @@ def test_builds_local_topics_relations_and_monthly_intensity(tmp_path: Path) -> 
             .where(Event.analysis_enabled.is_(False))
         )
         assert excluded_assignments == 0
+        assert session.scalar(select(func.count()).select_from(CandidateTerm)) > result.topics
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(CandidateTerm)
+                .where(CandidateTerm.quality_status == "rejected")
+            )
+            == result.rejected_terms
+        )
+        assert session.scalar(select(func.count()).select_from(TopicTerm)) == result.topic_terms
+        assert session.scalar(select(func.count()).select_from(EventCandidateTerm)) > 0
+
+    with make_session() as session:
+        second = build_topics(session, min_document_frequency=1, max_topics=100, topics_per_event=5)
+    assert second == result
+
+
+def test_applies_manual_topic_override_and_aliases(tmp_path: Path) -> None:
+    database_path = _migrated_database(tmp_path)
+    override_path = tmp_path / "topic-overrides.yaml"
+    override_path.write_text(
+        """
+topics:
+  - id: synthetic_garden_concept
+    name: Synthetic Garden Concept
+    aliases:
+      - synthetic garden
+      - garden
+    category: synthetic
+""".strip(),
+        encoding="utf-8",
+    )
+    engine = create_sqlite_engine(database_path)
+    make_session = session_factory(engine)
+    with make_session() as session:
+        import_chatgpt_export(session, FIXTURE_DIR)
+    with make_session() as session:
+        build_topics(
+            session,
+            min_document_frequency=1,
+            max_topics=100,
+            topics_per_event=5,
+            overrides_path=override_path,
+        )
+
+    with make_session() as session:
+        manual = session.scalar(select(Topic).where(Topic.name == "Synthetic Garden Concept"))
+        assert manual is not None
+        assert manual.origin == "manual"
+        assert manual.category == "synthetic"
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(TopicTerm)
+                .where(TopicTerm.topic_id == manual.topic_id)
+            )
+            == 2
+        )
 
 
 def test_filters_and_limits_topic_graph(tmp_path: Path) -> None:
@@ -193,7 +331,7 @@ def test_filters_and_limits_topic_graph(tmp_path: Path) -> None:
             start=datetime(2024, 3, 1, tzinfo=UTC),
             end=datetime(2024, 4, 1, tzinfo=UTC),
             source_type="chatgpt",
-            categories=frozenset({"keyword"}),
+            categories=frozenset({"topic"}),
             min_occurrences=1,
             min_edge_messages=1,
             node_limit=3,
@@ -203,7 +341,7 @@ def test_filters_and_limits_topic_graph(tmp_path: Path) -> None:
     assert all(node.first_seen_at.month == 3 for node in graph.nodes if node.first_seen_at)
     assert all(edge.message_count >= 1 for edge in graph.edges)
 
-    selected = next(node.topic_id for node in graph.nodes if node.name == "garden")
+    selected = graph.nodes[0].topic_id
     with make_session() as session:
         neighbors = get_topic_graph(
             session,

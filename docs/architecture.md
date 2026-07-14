@@ -6,7 +6,7 @@
 prywatne źródło (tylko odczyt)
   -> SourceAdapter
   -> Source + Event + rekord źródłowy
-  -> Topics / Entities / Relations
+  -> CandidateTerms -> Topics / Entities / Relations
   -> API
   -> Graph + Timeline + Source Browser
 ```
@@ -21,7 +21,7 @@ Format ChatGPT nie jest modelem domenowym aplikacji. `ChatGPTExportAdapter` będ
 - `backend/app/api`: filtrowanie po czasie, źródle i poziomie prywatności;
 - `frontend`: graf, oś czasu i kontekst fragmentu.
 
-Planowany rdzeń bazy obejmuje: `sources`, `events`, `entities`, `topics`, `event_topics`, `event_entities`, `event_relations` oraz `import_runs`. Pierwsze rozszerzenie obejmie `chatgpt_conversations` i `chatgpt_messages`. Warstwa persystencji użyje SQLAlchemy 2.x, a zmiany schematu będą wersjonowane przez Alembic. Bazą pozostaje pojedynczy lokalny plik SQLite. Wyszukiwanie tekstu użyje FTS5, o ile lokalna kompilacja SQLite je udostępnia.
+Rdzeń bazy obejmuje: `sources`, `events`, `candidate_terms`, `topics`, `topic_terms`, `event_candidate_terms`, `event_topics`, `entities`, `event_entities`, `event_relations` oraz `import_runs`. Rozszerzenie źródłowe obejmuje `chatgpt_conversations` i `chatgpt_messages`. Warstwa persystencji używa SQLAlchemy 2.x, a zmiany schematu są wersjonowane przez Alembic. Bazą pozostaje pojedynczy lokalny plik SQLite. Wyszukiwanie tekstu używa FTS5.
 
 ## Idempotencja
 
@@ -35,7 +35,7 @@ Publiczny kontrakt lokalnego backendu jest opisany modelami Pydantic. Wyszukiwan
 
 Każde zdarzenie ma neutralne `context_id`, `is_active` oraz `analysis_enabled`. `context_id` grupuje zdarzenia bez zależności od typu źródła, `is_active` pozwala zachować historię rekordów nieobecnych w nowszym imporcie, a `analysis_enabled` oddziela przechowywanie tekstu od zgody na udział w NLP. Dla ChatGPT analizowane są tylko widoczne `text` i `multimodal_text`.
 
-Pierwsza analiza tematów używa lokalnej normalizacji Unicode, wspólnych słów pustych dla polskiego, szwedzkiego i angielskiego, unigramów, bigramów oraz TF-IDF. `event_topics` przechowuje przypisania, a `topic_relations` globalne współwystępowanie. Warstwa zapytań przelicza widoczny graf dla zakresu czasu i filtrów, dzięki czemu frontend nie zależy od globalnych agregatów.
+Analiza najpierw zapisuje surowe unigramy, bigramy i opcjonalne trigramy jako `CandidateTerm`. Deterministyczne reguły jakości zachowują odrzucone rekordy wraz z powodem, lecz wyłączają je z grafu. Zaakceptowane frazy i warianty są grupowane w prezentacyjne `Topic`; `topic_terms` zachowuje pochodzenie, aliasy i ręczne mapowania. `event_candidate_terms` umożliwia diagnostykę surowej analizy, a `event_topics` zasila domyślny graf. Lokalne nadpisania mogą być przechowywane wyłącznie w ignorowanym `data/local_topic_overrides.yaml`.
 
 ## Decyzje odłożone do inspekcji
 
