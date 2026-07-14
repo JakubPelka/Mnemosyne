@@ -45,6 +45,37 @@ Ten dokument jest zwięzłym dziennikiem logicznych bloków prac. Szczegółowe 
 ### Commity
 
 - baza naprawy: `7a65119`;
+- przywrócenie eksploracji terminów i uczciwych warstw: `fdf31a1`.
+
+## 2026-07-14 — Strojenie promocji na lokalnej bazie
+
+### Wykonane zadania
+
+- przebudowano lokalną bazę iteracyjnie, raportując wyłącznie agregaty;
+- odrzucono samodzielną promocję akronimu do tematu bez grupy lub zatwierdzenia;
+- uznano frazę za temat tylko wtedy, gdy informacyjnie dominuje co najmniej jeden składnik;
+- zachowano akronimy jako aktywne, wyszukiwalne terminy niezależnie od limitu przypisań;
+- uogólniono etykiety UI tak, aby nie nazywały terminów tematami.
+
+### Testy i wyniki
+
+- lokalny akronim kontrolny jest aktywny i ma 750 przypisań do zdarzeń;
+- osiem wskazanych tokenów kodowych daje zero aktywnych tematów;
+- 195 tematów beta ma 405 przypisanych terminów; zero tematów ma tylko jeden termin;
+- aktywne tematy beta składają się wyłącznie z grup wariantów albo fraz z aliasem składnika;
+- końcowy przebieg: 6 906 kandydatów, 4 485 aktywnych terminów, 2 421 odrzuconych kandydatów;
+- 371 kandydatów odrzucono z powodu klasy `code_token`.
+
+### Decyzje, ograniczenia i następny krok
+
+- liczba 195 nie jest celem do wypełnienia: wynika z warunku wieloterminowego, a nie limitu grafu; domyślnie widoczne są terminy;
+- jakość nazw grup nadal wymaga oceny użytkowej, dlatego warstwa pozostaje oznaczona jako beta;
+- przebudowa nadal zużywa około 2,25 GiB pamięci i trwa około 35 s;
+- następny krok: pełna walidacja API/UI, migracji, Compose i prywatności.
+
+### Commity
+
+- baza bloku: `fdf31a1`;
 - bieżący blok: oczekuje na commit.
 
 ## 2026-07-13 — Lokalny graf tematów i pierwszy pionowy wycinek API

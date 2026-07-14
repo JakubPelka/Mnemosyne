@@ -7,7 +7,7 @@ test("graph filters omit neighbors without a selected topic", () => {
   expect(query).not.toContain("neighbors_only");
 });
 
-test("diagnostic graph view is explicit and defaults to 30 nodes", () => {
+test("term graph layer is explicit and defaults to 30 nodes", () => {
   const query = graphQuery({ ...DEFAULT_FILTERS, graphView: "terms" }, null);
   expect(query).toContain("layer=terms");
   expect(query).toContain("node_limit=30");

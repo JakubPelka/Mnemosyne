@@ -172,7 +172,7 @@ export default function App() {
         <aside className="left-panel">
           <div className="panel-heading"><span>01</span><h1>Eksploruj</h1></div>
           <label className="search-box">
-            <span>Wyszukaj temat</span>
+            <span>Wyszukaj termin lub temat</span>
             <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="np. projekt" />
           </label>
           <TopicSearchResults query={search} results={searchResults} onSelect={selectResult} />
@@ -191,7 +191,7 @@ export default function App() {
           </div>
         </aside>
 
-        <section className="graph-panel" aria-label="Graf tematów">
+        <section className="graph-panel" aria-label="Graf terminów i tematów">
           <div className="graph-caption">
             <span>{graph?.nodes.length ?? 0} węzłów · {graph?.edges.length ?? 0} relacji</span>
             <span>{filters.graphView === "topics" ? "tematy beta" : "terminy"} · rozmiar = intensywność okresu</span>

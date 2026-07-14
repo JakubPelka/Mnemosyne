@@ -72,7 +72,7 @@ export function FilterPanel({
       </label>
       <label className="toggle">
         <input type="checkbox" checked={filters.neighborsOnly} disabled={!selectedTopicId} onChange={(event) => onChange({ ...filters, neighborsOnly: event.target.checked })} />
-        Tylko sąsiedzi wybranego tematu
+        Tylko sąsiedzi wybranego węzła
       </label>
       <div className="filter-actions">
         <button className="primary" type="submit">Zastosuj</button>

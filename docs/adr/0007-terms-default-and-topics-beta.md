@@ -10,7 +10,7 @@ Pierwsza implementacja `CandidateTerm → Topic` automatycznie promowała niemal
 
 `CandidateTerm` jest uczciwie nazywaną warstwą eksploracyjną „Terminy” i pozostaje domyślnym widokiem. Zachowuje graf, wyszukiwanie, intensywność, sąsiedztwo, fragmenty i ograniczony kontekst.
 
-„Tematy (beta)” zawierają wyłącznie ręczne mapowania, grupy wielu wariantów, wartościowe frazy wielowyrazowe oraz rozpoznane akronimy. Samotny zaakceptowany unigram nie jest automatycznie tematem. Limit grafu jest wyłącznie górną granicą i nigdy nie jest sztucznie wypełniany.
+„Tematy (beta)” zawierają wyłącznie ręczne mapowania, grupy wielu wariantów i wartościowe frazy wielowyrazowe. Rozpoznane akronimy pozostają chronionymi terminami, lecz wymagają grupy lub lokalnego zatwierdzenia przed promocją do tematu. Samotny zaakceptowany unigram nie jest automatycznie tematem. Limit grafu jest wyłącznie górną granicą i nigdy nie jest sztucznie wypełniany.
 
 API używa jawnego parametru `layer=terms|topics`; dotychczasowy parametr `view` grafu pozostaje przejściowo obsługiwany dla zgodności.
 

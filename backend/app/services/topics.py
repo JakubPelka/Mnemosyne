@@ -119,7 +119,10 @@ def build_topics(
         for term in document.terms:
             document_frequency[term] += 1
             term_contexts[term].add(document.context_id)
-    acronym_terms = {term for document in documents for term in document.acronyms}
+    acronym_document_frequency: Counter[str] = Counter()
+    for document in documents:
+        acronym_document_frequency.update(document.acronyms)
+    observed_acronyms = set(acronym_document_frequency)
 
     overrides = load_topic_overrides(overrides_path)
     manual_aliases = {alias for override in overrides for alias in override.aliases}
@@ -127,7 +130,7 @@ def build_topics(
         document_frequency,
         key=lambda term: (-document_frequency[term], -term.count(" "), term),
     )[:max_candidate_terms]
-    selected_terms = set(ranked_terms) | manual_aliases | acronym_terms
+    selected_terms = set(ranked_terms) | manual_aliases | observed_acronyms
     document_count = len(documents)
     for document in documents:
         for term, frequency in document.terms.items():
@@ -145,7 +148,7 @@ def build_topics(
         document_count=document_count,
         min_document_frequency=min_document_frequency,
         manual_aliases=manual_aliases,
-        acronym_terms=acronym_terms,
+        acronym_document_frequency=acronym_document_frequency,
     )
     _persist_candidates(session, metrics)
     candidate_assignments = _candidate_assignments(
@@ -305,19 +308,28 @@ def _candidate_metrics(
     document_count: int,
     min_document_frequency: int,
     manual_aliases: set[str],
-    acronym_terms: set[str],
+    acronym_document_frequency: Counter[str],
 ) -> dict[str, _CandidateMetrics]:
     result = {}
     for term in sorted(selected_terms):
         frequency = document_frequency[term]
         tfidf_score = total_term_score[term] / max(1, frequency)
+        is_acronym = (
+            2 <= len(term) <= 6
+            and frequency >= min_document_frequency
+            and (
+                document_count < 50
+                or (frequency / max(1, document_count) <= 0.05 and tfidf_score >= 3.5)
+            )
+            and acronym_document_frequency[term] / max(1, frequency) >= 0.8
+        )
         quality = assess_term(
             term,
             document_frequency=frequency,
             document_count=document_count,
             tfidf_score=tfidf_score,
             min_document_frequency=min_document_frequency,
-            allow_short_acronym=term in acronym_terms,
+            allow_short_acronym=is_acronym,
         )
         if term in manual_aliases:
             quality = TermQuality(
@@ -334,7 +346,7 @@ def _candidate_metrics(
             context_count=len(term_contexts[term]),
             tfidf_score=tfidf_score,
             quality=quality,
-            is_acronym=term in acronym_terms,
+            is_acronym=is_acronym,
             is_manual=term in manual_aliases,
         )
     return result
@@ -492,8 +504,8 @@ def _build_topic_definitions(
         primary = ranked[0]
         aliases = tuple(dict.fromkeys([*ranked, *sorted(phrase_aliases.get(primary, set()))]))
         primary_metric = accepted[primary]
-        qualifies = (
-            len(terms) >= 2 or primary_metric.quality.ngram_size >= 2 or primary_metric.is_acronym
+        qualifies = len(terms) >= 2 or (
+            primary_metric.quality.ngram_size >= 2 and bool(phrase_aliases.get(primary))
         )
         if not qualifies:
             continue

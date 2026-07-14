@@ -47,7 +47,7 @@ export function TopicDetails({
       <section>
         <h3>Intensywność miesięczna</h3>
         {detail.months.length ? (
-          <div className="intensity-chart" aria-label="Miesięczna intensywność tematu">
+          <div className="intensity-chart" aria-label="Miesięczna intensywność węzła">
             {detail.months.map((month) => (
               <div className="intensity-column" key={month.month} title={`${month.month}: ${month.message_count}`}>
                 <span style={{ height: `${Math.max(5, (month.message_count / maxIntensity) * 100)}%` }} />

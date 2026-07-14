@@ -15,7 +15,7 @@ export function StatusPanel({ loading, error, empty }: StatusPanelProps) {
   if (empty)
     return (
       <div className="status-card">
-        Brak tematów dla wybranych filtrów. Zmniejsz progi lub zmień zakres czasu.
+        Brak węzłów dla wybranej warstwy i filtrów. Zmniejsz progi lub zmień zakres czasu.
       </div>
     );
   return null;

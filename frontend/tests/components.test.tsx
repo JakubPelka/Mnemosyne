@@ -16,7 +16,7 @@ test("selects a topic from search results", () => {
 
 test("renders empty and backend error states", () => {
   const { rerender } = render(<StatusPanel empty />);
-  expect(screen.getByText(/brak tematów/i)).toBeInTheDocument();
+  expect(screen.getByText(/brak węzłów/i)).toBeInTheDocument();
   rerender(<StatusPanel error="API 503" />);
   expect(screen.getByRole("alert")).toHaveTextContent("API 503");
 });
