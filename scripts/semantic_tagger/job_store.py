@@ -1,0 +1,159 @@
+import sqlite3
+import json
+import uuid
+import hashlib
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, Any, List, Optional, Tuple
+
+DB_PATH = Path("data/semantic_tagger.local.sqlite3")
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS tagging_run (
+    run_id TEXT PRIMARY KEY,
+    created_at TEXT,
+    updated_at TEXT,
+    status TEXT,
+    source_database_fingerprint TEXT,
+    model_name TEXT,
+    model_digest TEXT,
+    ollama_version TEXT,
+    prompt_version TEXT,
+    schema_version TEXT,
+    unit_strategy_version TEXT,
+    consolidation_prompt_version TEXT,
+    settings_json TEXT
+);
+
+CREATE TABLE IF NOT EXISTS tagging_unit (
+    unit_id TEXT PRIMARY KEY,
+    context_id TEXT,
+    sequence_no INTEGER,
+    content_hash TEXT,
+    event_ids_json TEXT,
+    event_count INTEGER,
+    character_count INTEGER,
+    estimated_token_count INTEGER,
+    first_event_at TEXT,
+    last_event_at TEXT,
+    created_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS tagging_job (
+    job_id TEXT PRIMARY KEY,
+    job_key TEXT UNIQUE,
+    run_id TEXT,
+    unit_id TEXT,
+    status TEXT,
+    attempt_count INTEGER DEFAULT 0,
+    lease_started_at TEXT,
+    lease_expires_at TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    elapsed_ms INTEGER,
+    input_hash TEXT,
+    output_hash TEXT,
+    output_json TEXT,
+    error_code TEXT,
+    error_summary TEXT,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS conversation_consolidation (
+    consolidation_id TEXT PRIMARY KEY,
+    run_id TEXT,
+    context_id TEXT,
+    job_key TEXT,
+    status TEXT,
+    attempt_count INTEGER DEFAULT 0,
+    input_hash TEXT,
+    output_hash TEXT,
+    output_json TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    elapsed_ms INTEGER,
+    error_code TEXT
+);
+"""
+
+class JobStore:
+    def __init__(self, db_path: Path = DB_PATH):
+        self.db_path = db_path
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._init_db()
+
+    def _init_db(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.executescript(SCHEMA)
+
+    def _now(self):
+        return datetime.utcnow().isoformat()
+
+    def create_run(self, run_info: Dict[str, Any]) -> str:
+        run_id = str(uuid.uuid4())
+        now = self._now()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO tagging_run (run_id, created_at, updated_at, status, source_database_fingerprint, model_name, model_digest, ollama_version, prompt_version, schema_version, unit_strategy_version, consolidation_prompt_version, settings_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    run_id, now, now, "created", run_info.get("fingerprint"),
+                    run_info.get("model_name"), run_info.get("model_digest"),
+                    run_info.get("ollama_version"), run_info.get("prompt_version"),
+                    run_info.get("schema_version"), run_info.get("unit_strategy_version"),
+                    run_info.get("consolidation_prompt_version"),
+                    json.dumps(run_info.get("settings", {}))
+                )
+            )
+        return run_id
+
+    def save_unit(self, unit: Dict[str, Any]):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO tagging_unit (unit_id, context_id, sequence_no, content_hash, event_ids_json, event_count, character_count, estimated_token_count, first_event_at, last_event_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    unit["unit_id"], unit["context_id"], unit["sequence_no"],
+                    unit["content_hash"], json.dumps(unit["event_ids"]),
+                    unit["event_count"], unit["character_count"],
+                    unit["estimated_token_count"], unit["first_event_at"],
+                    unit["last_event_at"], self._now()
+                )
+            )
+
+    def queue_job(self, job_key: str, run_id: str, unit_id: str, input_hash: str):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO tagging_job (job_id, job_key, run_id, unit_id, status, attempt_count, input_hash) VALUES (?, ?, ?, ?, 'pending', 0, ?)",
+                (str(uuid.uuid4()), job_key, run_id, unit_id, input_hash)
+            )
+    
+    def get_pending_jobs(self, limit: int = 10) -> List[Dict]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            # Restore expired leases
+            now = self._now()
+            conn.execute("UPDATE tagging_job SET status = 'pending' WHERE status = 'running' AND lease_expires_at < ?", (now,))
+            
+            rows = conn.execute("SELECT * FROM tagging_job WHERE status IN ('pending', 'error') AND attempt_count < 3 ORDER BY attempt_count ASC LIMIT ?", (limit,)).fetchall()
+            return [dict(r) for r in rows]
+
+    def lease_job(self, job_id: str, lease_seconds: int = 300) -> bool:
+        now = datetime.utcnow()
+        expires = datetime.utcfromtimestamp(now.timestamp() + lease_seconds).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("UPDATE tagging_job SET status = 'running', lease_started_at = ?, lease_expires_at = ?, attempt_count = attempt_count + 1 WHERE job_id = ? AND status IN ('pending', 'error')", (now.isoformat(), expires, job_id))
+            return cursor.rowcount > 0
+
+    def complete_job(self, job_id: str, output_json: str, output_hash: str, elapsed_ms: int, prompt_tokens: int, completion_tokens: int):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE tagging_job SET status = 'done', completed_at = ?, elapsed_ms = ?, output_json = ?, output_hash = ?, prompt_tokens = ?, completion_tokens = ? WHERE job_id = ?",
+                (self._now(), elapsed_ms, output_json, output_hash, prompt_tokens, completion_tokens, job_id)
+            )
+
+    def fail_job(self, job_id: str, error_code: str, error_summary: str):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE tagging_job SET status = 'error', error_code = ?, error_summary = ? WHERE job_id = ?",
+                (error_code, error_summary, job_id)
+            )
