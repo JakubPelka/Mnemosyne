@@ -522,6 +522,8 @@ def explore_search_query(
             filtered_event_ids,
             excluded_term_ids=matched_term_ids,
             query_tokens=query_tokens,
+            normalized_query=normalized,
+            query_context_count=len(contexts),
             privacy_level=privacy_level,
             limit=neighbor_limit,
         ),
@@ -981,6 +983,8 @@ def _aggregate_query_neighbors(
     *,
     excluded_term_ids: set[str],
     query_tokens: tuple[str, ...],
+    normalized_query: str,
+    query_context_count: int,
     privacy_level: str,
     limit: int,
 ) -> tuple[TopicNeighbor, ...]:
@@ -1025,12 +1029,13 @@ def _aggregate_query_neighbors(
         )
     )
     metadata = {
-        term_id: (name, rejection_reason)
-        for term_id, name, rejection_reason in session.execute(
+        term_id: (name, rejection_reason, context_count)
+        for term_id, name, rejection_reason, context_count in session.execute(
             select(
                 CandidateTerm.term_id,
                 CandidateTerm.term,
                 CandidateTerm.rejection_reason,
+                CandidateTerm.context_count,
             ).where(
                 CandidateTerm.term_id.in_(eligible_ids),
                 CandidateTerm.is_active.is_(True),
@@ -1039,13 +1044,9 @@ def _aggregate_query_neighbors(
             )
         )
     }
-    ranked = sorted(
-        metadata,
-        key=lambda term_id: (-len(term_events[term_id]), metadata[term_id][0]),
-    )
-    result = []
-    for term_id in ranked:
-        name, rejection_reason = metadata[term_id]
+    candidates = []
+    seen_normalized = {normalized_query}
+    for term_id, (name, rejection_reason, global_context_count) in metadata.items():
         if not _is_exploration_neighbor(
             name,
             rejection_reason=rejection_reason,
@@ -1053,21 +1054,28 @@ def _aggregate_query_neighbors(
             query_tokens=query_tokens,
         ):
             continue
-        message_count = len(term_events[term_id])
-        context_count = len(term_contexts[term_id])
-        result.append(
+        normalized_name = normalize_term(name)
+        if normalized_name in seen_normalized:
+            continue
+        
+        shared_context_count = len(term_contexts[term_id])
+        denominator = math.sqrt(query_context_count * global_context_count)
+        weight = shared_context_count / denominator if denominator > 0 else 0.0
+
+        candidates.append(
             TopicNeighbor(
                 topic_id=term_id,
                 name=name,
                 category="term",
-                message_count=message_count,
-                context_count=context_count,
-                weight=context_count / max(1, len(event_ids)),
+                message_count=len(term_events[term_id]),
+                context_count=shared_context_count,
+                weight=weight,
             )
         )
-        if len(result) >= limit:
-            break
-    return tuple(result)
+        seen_normalized.add(normalized_name)
+        
+    ranked = sorted(candidates, key=lambda item: (-item.weight, item.name))
+    return tuple(ranked[:limit])
 
 
 _DOMAIN_PARTS = frozenset({"ai", "app", "co", "com", "dev", "eu", "io", "net", "org", "pl", "se"})
