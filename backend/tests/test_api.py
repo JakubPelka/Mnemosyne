@@ -204,7 +204,7 @@ def test_aggregate_exploration_deduplicates_events(api_fixture: ApiFixture) -> N
     assert len(occurrence_ids) == len(set(occurrence_ids))
     matched_ids = {item["item_id"] for item in body["matched_terms"]}
     assert not matched_ids & {item["topic_id"] for item in body["neighbors"]}
-    
+
     neighbor_names = [item["name"].lower() for item in body["neighbors"]]
     assert "garden" not in neighbor_names
     assert len(neighbor_names) == len(set(neighbor_names))

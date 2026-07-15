@@ -1057,7 +1057,7 @@ def _aggregate_query_neighbors(
         normalized_name = normalize_term(name)
         if normalized_name in seen_normalized:
             continue
-        
+
         shared_context_count = len(term_contexts[term_id])
         denominator = math.sqrt(query_context_count * global_context_count)
         weight = shared_context_count / denominator if denominator > 0 else 0.0
@@ -1073,7 +1073,7 @@ def _aggregate_query_neighbors(
             )
         )
         seen_normalized.add(normalized_name)
-        
+
     ranked = sorted(candidates, key=lambda item: (-item.weight, item.name))
     return tuple(ranked[:limit])
 
