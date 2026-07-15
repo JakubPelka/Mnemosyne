@@ -59,3 +59,49 @@ test("Enter explores all matches and changing the query clears the result", asyn
   expect(screen.queryByTestId("synthetic-graph")).not.toBeInTheDocument();
   expect(screen.getByText(/wybierz węzeł/i)).toBeInTheDocument();
 });
+
+test("Startup race condition: aborted graph request does not overwrite new request", async () => {
+  let resolveSecondGraph: (res: Response) => void;
+  const graphPromises: Promise<Response>[] = [];
+
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = String(input);
+    const signal = init?.signal as AbortSignal;
+    if (url === "/api/meta") {
+      return new Response(JSON.stringify({
+        earliest_event_at: "2024-01-01T00:00:00Z",
+        latest_event_at: "2024-02-01T00:00:00Z",
+        source_types: ["chatgpt"],
+        topic_categories: [],
+        counts: { events: 0, candidate_terms: 0, topics: 0, candidate_term_relations: 0, topic_relations: 0 },
+        api_version: "0.5.0",
+      }), { status: 200 });
+    }
+    if (url.startsWith("/api/graph?")) {
+      const p = new Promise<Response>((resolve, reject) => {
+        const handler = () => reject(new DOMException("Aborted", "AbortError"));
+        if (signal?.aborted) return handler();
+        signal?.addEventListener("abort", handler);
+        if (graphPromises.length === 0) {
+          // First request never manually resolved; it will be aborted when filters update
+        } else {
+          resolveSecondGraph = (res) => { signal?.removeEventListener("abort", handler); resolve(res); };
+        }
+      });
+      graphPromises.push(p);
+      return p;
+    }
+    throw new Error(`Unexpected local request: ${url}`);
+  });
+
+  render(<App />);
+  
+  await waitFor(() => expect(graphPromises.length).toBeGreaterThan(1));
+  
+  resolveSecondGraph!(new Response(JSON.stringify({ 
+    nodes: [{ topic_id: "test1", name: "test", category: "term", message_count: 1 }], 
+    edges: [] 
+  }), { status: 200 }));
+  
+  expect(await screen.findByTestId("synthetic-graph")).toHaveTextContent("term");
+});
