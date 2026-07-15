@@ -1,6 +1,5 @@
 import time
 import threading
-import socket
 import sqlite3
 from pathlib import Path
 
@@ -31,6 +30,7 @@ class HeartbeatThread(threading.Thread):
                         (now, self.run_id, self.worker_id),
                     )
                     conn.commit()
+                    JobStore().renew_lease(self.worker_id)
                 except sqlite3.OperationalError:
                     pass
                 for _ in range(10):
@@ -42,46 +42,60 @@ class HeartbeatThread(threading.Thread):
         self.running = False
 
 
-def run_worker_loop(model_name: str, schema_version="semantic-tags-v1", strategy_version="unit-v1"):
+def run_worker_loop(model_name: str, target_run_id: str = None, max_jobs: int = 0, schema_version="semantic-tags-v1", strategy_version="unit-v1"):
     store = JobStore()
 
-    # Get active run
     with sqlite3.connect(store.db_path) as conn:
         conn.row_factory = sqlite3.Row
-        run_row = conn.execute(
-            "SELECT run_id FROM tagging_run ORDER BY created_at DESC LIMIT 1"
-        ).fetchone()
-        if not run_row:
-            print("No active tagging run found.")
-            return
+        if target_run_id:
+            run_row = conn.execute("SELECT * FROM tagging_run WHERE run_id = ?", (target_run_id,)).fetchone()
+            if not run_row:
+                print(f"Run {target_run_id} not found.")
+                return
+        else:
+            run_row = conn.execute("SELECT * FROM tagging_run ORDER BY created_at DESC LIMIT 1").fetchone()
+            if not run_row:
+                print("No active tagging run found.")
+                return
 
         run_id = run_row["run_id"]
-
-        # Check for other active workers
-        active_workers = conn.execute(
-            "SELECT worker_id FROM worker_state WHERE run_id = ? AND status = 'running' AND datetime(heartbeat_at) > datetime('now', '-30 seconds')",
-            (run_id,),
-        ).fetchall()
-
-        if active_workers:
-            print("Another worker is already running for this run.")
+        
+        # Verify model config matches the run config
+        if run_row["model_name"] != model_name:
+            print(f"Model mismatch. Run requires {run_row['model_name']}, but worker provided {model_name}")
             return
+            
+        # Check for other active workers atomically using a transaction
+        conn.execute("BEGIN EXCLUSIVE")
+        try:
+            active_workers = conn.execute(
+                "SELECT worker_id FROM worker_state WHERE run_id = ? AND status = 'running' AND datetime(heartbeat_at) > datetime('now', '-30 seconds')",
+                (run_id,),
+            ).fetchall()
 
-    worker_id = "w1"
-    hostname = socket.gethostname()
-    import os
+            if active_workers:
+                print("Another live worker already owns this run.")
+                conn.execute("ROLLBACK")
+                return
 
-    pid = os.getpid()
+            worker_id = "w1"
+            import socket
+            hostname = socket.gethostname()
+            import os
+            pid = os.getpid()
 
-    import datetime
+            import datetime
+            now = datetime.datetime.utcnow().isoformat()
 
-    now = datetime.datetime.utcnow().isoformat()
-
-    with sqlite3.connect(store.db_path) as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO worker_state (run_id, worker_id, worker_pid, hostname, status, started_at, heartbeat_at, pause_requested, stop_after_current_requested) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0)",
-            (run_id, worker_id, pid, hostname, "running", now, now),
-        )
+            conn.execute(
+                "INSERT OR REPLACE INTO worker_state (run_id, worker_id, worker_pid, hostname, status, started_at, heartbeat_at, pause_requested, stop_after_current_requested) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0)",
+                (run_id, worker_id, pid, hostname, "running", now, now),
+            )
+            conn.execute("COMMIT")
+        except Exception as e:
+            conn.execute("ROLLBACK")
+            print(f"Failed to acquire worker lock: {e}")
+            return
 
     heartbeat = HeartbeatThread(store.db_path, run_id, worker_id)
     heartbeat.start()
@@ -89,8 +103,14 @@ def run_worker_loop(model_name: str, schema_version="semantic-tags-v1", strategy
     client = OllamaClient(model_name)
     worker = Worker(store, client)
 
+    jobs_processed = 0
+
     try:
         while True:
+            if max_jobs > 0 and jobs_processed >= max_jobs:
+                print(f"Max jobs limit ({max_jobs}) reached. Exiting worker loop.")
+                break
+                
             # Check worker state
             with sqlite3.connect(store.db_path) as conn:
                 conn.row_factory = sqlite3.Row
@@ -107,7 +127,7 @@ def run_worker_loop(model_name: str, schema_version="semantic-tags-v1", strategy
                         time.sleep(2)
                         continue
 
-            job = store.claim_next_job(worker_id)
+            job = store.claim_next_job(run_id, worker_id)
             if not job:
                 print("No more pending jobs. Exiting worker loop.")
                 break
@@ -115,6 +135,7 @@ def run_worker_loop(model_name: str, schema_version="semantic-tags-v1", strategy
             print(f"Processing job {job['job_id']}...")
 
             with sqlite3.connect(store.db_path) as conn:
+                import datetime
                 now = datetime.datetime.utcnow().isoformat()
                 conn.execute(
                     "UPDATE worker_state SET last_job_started_at = ? WHERE run_id = ? AND worker_id = ?",
@@ -140,7 +161,10 @@ def run_worker_loop(model_name: str, schema_version="semantic-tags-v1", strategy
                 print(f"Job {job['job_id']} failed unexpected: {e}")
                 store.fail_job(job["job_id"], "unexpected_error", str(e))
 
+            jobs_processed += 1
+
             with sqlite3.connect(store.db_path) as conn:
+                import datetime
                 now = datetime.datetime.utcnow().isoformat()
                 conn.execute(
                     "UPDATE worker_state SET last_job_completed_at = ? WHERE run_id = ? AND worker_id = ?",

@@ -26,9 +26,9 @@ class Worker:
             )
 
             # If attempt 2, add warning. If attempt 3, restrict concepts to 6 and drop relations
-            if attempt == 1:
+            if attempt == 2:
                 prompt += "\n\nOstatnia próba zakończyła się błędem schematu. Zwróć tylko 100% poprawne dane, używając poprawnego JSON."
-            elif attempt == 2:
+            elif attempt == 3:
                 prompt += "\n\nOstatnia próba zakończyła się błędem schematu. Zwróć maksymalnie 6 pojęć i 0 relacji."
 
             from scripts.semantic_tagger.schemas import TaggerOutput

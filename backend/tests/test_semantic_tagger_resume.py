@@ -26,22 +26,22 @@ def test_job_resume_and_skip():
         store.queue_job("key3", run_id, unit3, "hash3")
 
         # Initial state: 3 pending
-        pending = store.get_pending_jobs(10)
+        pending = store.get_pending_jobs(run_id, 10)
         assert len(pending) == 3
 
         # 1. Job 1 is done
         job1 = next(j for j in pending if j["job_key"] == "key1")
-        store.lease_job(job1["job_id"], lease_seconds=300)
+        store.claim_next_job(run_id, "w1") # To transition to running state
         store.complete_job(job1["job_id"], "{}", "out_hash", 100, 10, 10)
 
         # 2. Job 2 is interrupted (running, but expired lease)
-        job2 = next(j for j in pending if j["job_key"] == "key2")
-        store.lease_job(job2["job_id"], lease_seconds=-10)  # Immediately expired
+        next(j for j in pending if j["job_key"] == "key2")
+        store.claim_next_job(run_id, "w1", lease_seconds=-10) # To transition to running state
 
         # 3. Job 3 remains pending untouched
 
         # NOW: Restart worker (fetching pending jobs again)
-        new_pending = store.get_pending_jobs(10)
+        new_pending = store.get_pending_jobs(run_id, 10)
 
         # Done jobs should be skipped
         keys = [j["job_key"] for j in new_pending]

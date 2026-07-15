@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS tagging_job (
     job_key TEXT UNIQUE,
     run_id TEXT,
     unit_id TEXT,
+    worker_id TEXT,
     status TEXT,
     attempt_count INTEGER DEFAULT 0,
     lease_started_at TEXT,
@@ -183,7 +184,7 @@ class JobStore:
                 (str(uuid.uuid4()), job_key, run_id, unit_id, input_hash),
             )
 
-    def claim_next_job(self, worker_id: str, lease_seconds: int = 600) -> Dict[str, Any]:
+    def claim_next_job(self, run_id: str, worker_id: str, lease_seconds: int = 600) -> Dict[str, Any]:
         with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
             conn.row_factory = sqlite3.Row
 
@@ -196,7 +197,7 @@ class JobStore:
 
             # Find next
             row = conn.execute(
-                "SELECT * FROM tagging_job WHERE status IN ('pending', 'error') AND attempt_count < 3 ORDER BY attempt_count ASC LIMIT 1"
+                "SELECT * FROM tagging_job WHERE run_id = ? AND status IN ('pending', 'error') AND attempt_count < 3 ORDER BY attempt_count ASC LIMIT 1", (run_id,)
             ).fetchone()
 
             if not row:
@@ -212,16 +213,24 @@ class JobStore:
             ).isoformat()
 
             conn.execute(
-                "UPDATE tagging_job SET status = 'running', lease_started_at = ?, lease_expires_at = ?, attempt_count = attempt_count + 1 WHERE job_id = ?",
-                (dt_now.isoformat(), expires, job_id),
+                "UPDATE tagging_job SET status = 'running', attempt_count = attempt_count + 1, lease_started_at = ?, lease_expires_at = ?, worker_id = ? WHERE job_id = ?",
+                (dt_now.isoformat(), expires, worker_id, job_id),
             )
 
-            # Re-fetch to return updated job
-            return dict(
-                conn.execute("SELECT * FROM tagging_job WHERE job_id = ?", (job_id,)).fetchone()
+            conn.commit()
+            return dict(conn.execute("SELECT * FROM tagging_job WHERE job_id = ?", (job_id,)).fetchone())
+
+    def renew_lease(self, worker_id: str, lease_seconds: int = 600):
+        with sqlite3.connect(self.db_path) as conn:
+            import datetime
+            dt_now = datetime.datetime.utcnow()
+            expires = datetime.datetime.utcfromtimestamp(dt_now.timestamp() + lease_seconds)
+            conn.execute(
+                "UPDATE tagging_job SET lease_expires_at = ? WHERE worker_id = ? AND status = 'running'",
+                (expires.isoformat(), worker_id)
             )
 
-    def get_pending_jobs(self, limit: int = 10) -> List[Dict]:
+    def get_pending_jobs(self, run_id: str, limit: int = 10) -> List[Dict]:
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             # Restore expired leases
@@ -232,8 +241,8 @@ class JobStore:
             )
 
             rows = conn.execute(
-                "SELECT * FROM tagging_job WHERE status IN ('pending', 'error') AND attempt_count < 3 ORDER BY attempt_count ASC LIMIT ?",
-                (limit,),
+                "SELECT * FROM tagging_job WHERE run_id = ? AND status IN ('pending', 'error') AND attempt_count < 3 ORDER BY attempt_count ASC LIMIT ?",
+                (run_id, limit,),
             ).fetchall()
             return [dict(r) for r in rows]
 

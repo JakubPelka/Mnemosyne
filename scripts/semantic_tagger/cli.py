@@ -186,7 +186,7 @@ def get_active_run_id():
 def cmd_worker(args):
     from scripts.semantic_tagger.worker_loop import run_worker_loop
 
-    run_worker_loop(args.model)
+    run_worker_loop(args.model, args.run_id, args.max_jobs)
 
 
 def cmd_pause(args):
@@ -263,16 +263,12 @@ def cmd_status(args):
     def _print_status():
         with sqlite3.connect(store.db_path) as conn:
             conn.row_factory = sqlite3.Row
-            # Context stats
-            total_contexts = conn.execute(
-                "SELECT COUNT(DISTINCT context_id) FROM tagging_unit"
-            ).fetchone()[0]
+            # Context stats via tagging_unit
+            total_contexts = conn.execute("SELECT COUNT(DISTINCT context_id) FROM tagging_unit").fetchone()[0]
 
             # Unit stats
-            unit_stats = conn.execute(
-                "SELECT status, COUNT(*) as c FROM tagging_job GROUP BY status"
-            ).fetchall()
-            status_counts = {r["status"]: r["c"] for r in unit_stats}
+            unit_stats = conn.execute("SELECT status, COUNT(*) as c FROM tagging_job WHERE run_id = ? GROUP BY status", (run_id,)).fetchall()
+            status_counts = {r['status']: r['c'] for r in unit_stats}
 
             done = status_counts.get("done", 0)
             running = status_counts.get("running", 0)
@@ -288,12 +284,13 @@ def cmd_status(args):
                 SELECT u.context_id, 
                        COUNT(j.job_id) as total_jobs,
                        SUM(CASE WHEN j.status = 'done' THEN 1 ELSE 0 END) as done_jobs,
-                       SUM(CASE WHEN j.status = 'error' THEN 1 ELSE 0 END) as err_jobs
+                       SUM(CASE WHEN j.status = 'error' THEN 1 ELSE 0 END) as err_jobs,
+                       SUM(CASE WHEN j.status = 'running' THEN 1 ELSE 0 END) as running_jobs
                 FROM tagging_unit u
-                LEFT JOIN tagging_job j ON u.unit_id = j.unit_id
+                LEFT JOIN tagging_job j ON u.unit_id = j.unit_id AND j.run_id = ?
                 GROUP BY u.context_id
             """
-            ctx_stats = conn.execute(context_status_query).fetchall()
+            ctx_stats = conn.execute(context_status_query, (run_id,)).fetchall()
 
             complete_ctx = 0
             failed_ctx = 0
@@ -301,13 +298,18 @@ def cmd_status(args):
             pending_ctx = 0
 
             for ctx in ctx_stats:
-                if ctx["done_jobs"] == ctx["total_jobs"] and ctx["total_jobs"] > 0:
+                total_j = ctx['total_jobs'] or 0
+                done_j = ctx['done_jobs'] or 0
+                err_j = ctx['err_jobs'] or 0
+                run_j = ctx['running_jobs'] or 0
+
+                if total_j == 0 or (total_j == (err_j + done_j) and done_j == 0 and err_j == 0):
+                    pending_ctx += 1
+                elif done_j == total_j:
                     complete_ctx += 1
-                elif ctx["err_jobs"] == ctx["total_jobs"] and ctx["total_jobs"] > 0:
+                elif err_j == total_j:
                     failed_ctx += 1
-                elif (
-                    ctx["done_jobs"] > 0 or ctx["err_jobs"] > 0 or running > 0
-                ):  # Note: running assignment to ctx is complex, simplistic check
+                elif done_j > 0 or err_j > 0 or run_j > 0:
                     partial_ctx += 1
                 else:
                     pending_ctx += 1
@@ -315,62 +317,44 @@ def cmd_status(args):
             ctx_percent = (complete_ctx / total_contexts * 100) if total_contexts > 0 else 0
 
             # Retries
-            retry_count = (
-                conn.execute(
-                    "SELECT SUM(attempt_count - 1) FROM tagging_job WHERE attempt_count > 1"
-                ).fetchone()[0]
-                or 0
-            )
+            retry_count = conn.execute("SELECT SUM(attempt_count - 1) FROM tagging_job WHERE run_id = ? AND attempt_count > 1", (run_id,)).fetchone()[0] or 0
 
             # Quality
             job_success_rate = (done / (done + error) * 100) if (done + error) > 0 else 0
-            # For simplicity, assuming valid JSON and Pydantic pass are all 'done' ones
-            # In a real app we'd track these distinct failure modes
-            error_details = conn.execute(
-                "SELECT error_code, COUNT(*) as c FROM tagging_job WHERE status='error' GROUP BY error_code"
-            ).fetchall()
-            valid_json_errors = sum(
-                r["c"] for r in error_details if r["error_code"] == "invalid_json"
-            )
-            pydantic_errors = sum(
-                r["c"] for r in error_details if r["error_code"] == "validation_error"
-            )
+
+            error_details = conn.execute("SELECT error_code, COUNT(*) as c FROM tagging_job WHERE run_id = ? AND status='error' GROUP BY error_code", (run_id,)).fetchall()
+            valid_json_errors = sum(r['c'] for r in error_details if r['error_code'] == 'invalid_json')
+            pydantic_errors = sum(r['c'] for r in error_details if r['error_code'] == 'validation_error')
 
             completed_requests = done + valid_json_errors + pydantic_errors
-            valid_json_rate = (
-                ((completed_requests - valid_json_errors) / completed_requests * 100)
-                if completed_requests > 0
-                else 100
-            )
-            pydantic_rate = (done / completed_requests * 100) if completed_requests > 0 else 100
+            if completed_requests > 0:
+                valid_json_rate = f"{((completed_requests - valid_json_errors) / completed_requests * 100):.1f}%"
+                pydantic_rate = f"{(done / completed_requests * 100):.1f}%"
+            else:
+                valid_json_rate = "N/A"
+                pydantic_rate = "N/A"
 
             # Performance
-            completed_jobs = conn.execute(
-                "SELECT elapsed_ms FROM tagging_job WHERE status='done' AND elapsed_ms IS NOT NULL"
-            ).fetchall()
-            completed_times = [j["elapsed_ms"] / 1000.0 for j in completed_jobs]
+            completed_jobs = conn.execute("SELECT elapsed_ms FROM tagging_job WHERE run_id = ? AND status='done' AND elapsed_ms IS NOT NULL", (run_id,)).fetchall()
+            completed_times = [j['elapsed_ms'] / 1000.0 for j in completed_jobs]
 
             p25, median, p90, conf = calc_eta(completed_times, pending)
             units_per_hour = (3600 / median) if median else 0
 
             # Heartbeat and Worker State
-            w_state = conn.execute(
-                "SELECT * FROM worker_state WHERE run_id = ? ORDER BY heartbeat_at DESC LIMIT 1",
-                (run_id,),
-            ).fetchone()
+            w_state = conn.execute("SELECT * FROM worker_state WHERE run_id = ? ORDER BY heartbeat_at DESC LIMIT 1", (run_id,)).fetchone()
             w_status = "OFFLINE"
             hb_age = 9999
 
             if w_state:
                 import datetime
-
-                hb_time = datetime.datetime.fromisoformat(w_state["heartbeat_at"])
+                hb_time = datetime.datetime.fromisoformat(w_state['heartbeat_at'])
                 hb_age = (datetime.datetime.utcnow() - hb_time).total_seconds()
                 if hb_age <= 30:
                     w_status = "RUNNING"
-                    if w_state["pause_requested"]:
+                    if w_state['pause_requested']:
                         w_status = "PAUSED"
-                    elif w_state["stop_after_current_requested"]:
+                    elif w_state['stop_after_current_requested']:
                         w_status = "STOPPING"
                 elif hb_age <= 120:
                     w_status = "STALE"
@@ -385,7 +369,7 @@ def cmd_status(args):
                         "partial": partial_ctx,
                         "pending": pending_ctx,
                         "failed": failed_ctx,
-                        "percent": round(ctx_percent, 1),
+                        "percent": round(ctx_percent, 1)
                     },
                     "units": {
                         "total": total_units,
@@ -393,20 +377,20 @@ def cmd_status(args):
                         "running": running,
                         "pending": pending,
                         "error": error,
-                        "percent": round(units_percent, 1),
+                        "percent": round(units_percent, 1)
                     },
                     "quality": {
                         "job_success_rate": round(job_success_rate, 1),
-                        "valid_json_rate": round(valid_json_rate, 1),
-                        "retry_count": retry_count,
+                        "valid_json_rate": valid_json_rate,
+                        "retry_count": retry_count
                     },
                     "performance": {
                         "median_seconds_per_unit": round(median, 1) if median else None,
                         "units_per_hour": round(units_per_hour, 1),
                         "eta_seconds": median * pending if median else None,
-                        "eta_confidence": conf,
+                        "eta_confidence": conf
                     },
-                    "heartbeat_age_seconds": int(hb_age),
+                    "heartbeat_age_seconds": int(hb_age)
                 }
                 print(json.dumps(data, indent=2))
                 return
@@ -415,18 +399,14 @@ def cmd_status(args):
             print(f"Run: {run_id[:8]}...   Status: {w_status}")
             print(f"Heartbeat: {int(hb_age)} s ago")
             print("\nContexts:")
-            print(
-                f"[{'#' * int(ctx_percent / 5)}{'.' * (20 - int(ctx_percent / 5))}] {complete_ctx} / {total_contexts} completed   {ctx_percent:.1f}%"
-            )
+            print(f"[{'#'*int(ctx_percent/5)}{'.'*(20-int(ctx_percent/5))}] {complete_ctx} / {total_contexts} completed   {ctx_percent:.1f}%")
             print("\nUnits:")
-            print(
-                f"[{'#' * int(units_percent / 5)}{'.' * (20 - int(units_percent / 5))}] {done} / {total_units} done      {units_percent:.1f}%"
-            )
+            print(f"[{'#'*int(units_percent/5)}{'.'*(20-int(units_percent/5))}] {done} / {total_units} done      {units_percent:.1f}%")
 
             print("\nQuality:")
             print(f"  successful jobs:     {job_success_rate:.1f}%")
-            print(f"  valid JSON:          {valid_json_rate:.1f}%")
-            print(f"  Pydantic PASS:       {pydantic_rate:.1f}%")
+            print(f"  valid JSON:          {valid_json_rate}")
+            print(f"  Pydantic PASS:       {pydantic_rate}")
 
             print("\nPerformance:")
             if median:
@@ -439,7 +419,7 @@ def cmd_status(args):
 
     if args.watch:
         while True:
-            print("c", end="")
+            print("\033c", end="")
             _print_status()
             time.sleep(args.watch)
     else:
@@ -473,7 +453,18 @@ def main():
     parser_run.add_argument("--model", required=True)
     parser_run.add_argument("--max-jobs", type=int, default=50)
 
-    subparsers.add_parser("status")
+    parser_worker = subparsers.add_parser("worker")
+    parser_worker.add_argument("--model", type=str, default="qwen3:14b")
+    parser_worker.add_argument("--max-jobs", type=int, default=0, help="Maximum number of jobs to process before exiting (Canary Run)")
+    parser_worker.add_argument("--run-id", type=str, help="Run ID to bind to")
+
+    subparsers.add_parser("pause")
+    subparsers.add_parser("resume")
+    subparsers.add_parser("stop-after-current")
+
+    parser_status = subparsers.add_parser("status")
+    parser_status.add_argument("--watch", type=int, help="Refresh interval in seconds", nargs="?", const=5, default=0)
+    parser_status.add_argument("--json", action="store_true")
 
     parser_retry = subparsers.add_parser("retry-errors")
     parser_retry.add_argument("--max-attempts", type=int, default=3)

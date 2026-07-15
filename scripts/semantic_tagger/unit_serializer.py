@@ -12,25 +12,13 @@ def normalize_unit_text(text: str) -> str:
     return "\n".join(lines)
 
 
-def serialize_semantic_unit(manifest: Dict[str, Any], segments_text: List[str]) -> str:
-    """
-    manifest: {
-        "title_included": bool,
-        "title": str,
-        "segments": [
-            {"event_id": str, "role": str, ...},
-            ...
-        ]
-    }
-    segments_text: list of strings exactly corresponding to manifest["segments"]
-    """
+def serialize_semantic_unit(manifest: Dict[str, Any], segments_text: List[str], title_text: str = "") -> str:
     parts = []
-
+    
     # Title
-    title = manifest.get("title", "").strip() if manifest.get("title_included") else ""
     parts.append("[CONTEXT_TITLE]")
-    if title:
-        parts.append(title)
+    if manifest.get("title_included") and title_text:
+        parts.append(title_text)
     parts.append("[/CONTEXT_TITLE]")
 
     # Events
