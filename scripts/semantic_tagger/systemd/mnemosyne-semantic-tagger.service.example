@@ -1,0 +1,20 @@
+[Unit]
+Description=Mnemosyne local semantic tagger
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=__MNEMOSYNE_REPO__
+Environment=PYTHONUNBUFFERED=1
+Environment=OLLAMA_HOST=http://127.0.0.1:11434
+ExecStart=__MNEMOSYNE_REPO__/.venv/bin/python -m scripts.semantic_tagger.cli worker --model qwen3:14b
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=660
+KillSignal=SIGINT
+Nice=10
+CPUWeight=40
+IOWeight=40
+
+[Install]
+WantedBy=default.target

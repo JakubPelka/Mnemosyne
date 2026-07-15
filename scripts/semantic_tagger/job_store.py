@@ -6,8 +6,15 @@ from pathlib import Path
 from typing import Dict, Any, List
 
 DB_PATH = Path("data/semantic_tagger.local.sqlite3")
+EXPECTED_SCHEMA_VERSION = 2
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS sidecar_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);
+INSERT OR IGNORE INTO sidecar_meta (key, value) VALUES ('schema_version', '2');
+
 CREATE TABLE IF NOT EXISTS tagging_run (
     run_id TEXT PRIMARY KEY,
     created_at TEXT,
@@ -30,12 +37,28 @@ CREATE TABLE IF NOT EXISTS tagging_unit (
     sequence_no INTEGER,
     content_hash TEXT,
     event_ids_json TEXT,
+    segments_json TEXT,
     event_count INTEGER,
     character_count INTEGER,
     estimated_token_count INTEGER,
     first_event_at TEXT,
     last_event_at TEXT,
     created_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS worker_state (
+    run_id TEXT,
+    worker_id TEXT,
+    worker_pid INTEGER,
+    hostname TEXT,
+    status TEXT,
+    started_at TEXT,
+    heartbeat_at TEXT,
+    last_job_started_at TEXT,
+    last_job_completed_at TEXT,
+    pause_requested BOOLEAN DEFAULT 0,
+    stop_after_current_requested BOOLEAN DEFAULT 0,
+    PRIMARY KEY (run_id, worker_id)
 );
 
 CREATE TABLE IF NOT EXISTS tagging_job (
@@ -80,6 +103,24 @@ CREATE TABLE IF NOT EXISTS conversation_consolidation (
 class JobStore:
     def __init__(self, db_path: Path = DB_PATH):
         self.db_path = db_path
+        db_exists = self.db_path.exists()
+
+        if db_exists:
+            # Check version
+            with sqlite3.connect(self.db_path) as conn:
+                try:
+                    cursor = conn.execute(
+                        "SELECT value FROM sidecar_meta WHERE key='schema_version'"
+                    )
+                    row = cursor.fetchone()
+                    version = int(row[0]) if row else 1
+                except sqlite3.OperationalError:
+                    version = 1
+            if version != EXPECTED_SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"Sidecar schema mismatch.\nExpected: {EXPECTED_SCHEMA_VERSION}\nFound: {version}\nCreate a backup and run an explicit reset command."
+                )
+
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
@@ -117,13 +158,14 @@ class JobStore:
     def save_unit(self, unit: Dict[str, Any]):
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(
-                "INSERT OR IGNORE INTO tagging_unit (unit_id, context_id, sequence_no, content_hash, event_ids_json, event_count, character_count, estimated_token_count, first_event_at, last_event_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO tagging_unit (unit_id, context_id, sequence_no, content_hash, event_ids_json, segments_json, event_count, character_count, estimated_token_count, first_event_at, last_event_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     unit["unit_id"],
                     unit["context_id"],
                     unit["sequence_no"],
                     unit["content_hash"],
                     json.dumps(unit["event_ids"]),
+                    json.dumps(unit["segments"]),
                     unit["event_count"],
                     unit["character_count"],
                     unit["estimated_token_count"],
@@ -138,6 +180,44 @@ class JobStore:
             conn.execute(
                 "INSERT OR IGNORE INTO tagging_job (job_id, job_key, run_id, unit_id, status, attempt_count, input_hash) VALUES (?, ?, ?, ?, 'pending', 0, ?)",
                 (str(uuid.uuid4()), job_key, run_id, unit_id, input_hash),
+            )
+
+    def claim_next_job(self, worker_id: str, lease_seconds: int = 600) -> Dict[str, Any]:
+        with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
+            conn.row_factory = sqlite3.Row
+
+            # Restore expired leases
+            now = self._now()
+            conn.execute(
+                "UPDATE tagging_job SET status = 'pending' WHERE status = 'running' AND lease_expires_at < ?",
+                (now,),
+            )
+
+            # Find next
+            row = conn.execute(
+                "SELECT * FROM tagging_job WHERE status IN ('pending', 'error') AND attempt_count < 3 ORDER BY attempt_count ASC LIMIT 1"
+            ).fetchone()
+
+            if not row:
+                return None
+
+            job_id = row["job_id"]
+
+            import datetime
+
+            dt_now = datetime.datetime.utcnow()
+            expires = datetime.datetime.utcfromtimestamp(
+                dt_now.timestamp() + lease_seconds
+            ).isoformat()
+
+            conn.execute(
+                "UPDATE tagging_job SET status = 'running', lease_started_at = ?, lease_expires_at = ?, attempt_count = attempt_count + 1 WHERE job_id = ?",
+                (dt_now.isoformat(), expires, job_id),
+            )
+
+            # Re-fetch to return updated job
+            return dict(
+                conn.execute("SELECT * FROM tagging_job WHERE job_id = ?", (job_id,)).fetchone()
             )
 
     def get_pending_jobs(self, limit: int = 10) -> List[Dict]:

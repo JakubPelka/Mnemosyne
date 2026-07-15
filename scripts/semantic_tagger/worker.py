@@ -1,9 +1,6 @@
-import time
 import logging
 from scripts.semantic_tagger.job_store import JobStore
 from scripts.semantic_tagger.ollama_client import OllamaClient, OllamaError
-from scripts.semantic_tagger.prompt_builder import build_tagger_prompt
-from scripts.semantic_tagger.schemas import TaggerOutput
 from scripts.semantic_tagger.privacy import safe_hash
 
 logger = logging.getLogger(__name__)
@@ -14,25 +11,27 @@ class Worker:
         self.store = job_store
         self.client = ollama_client
 
-    def run_one(
-        self, job: dict, content: str, contains_code: bool, contains_logs: bool, contains_urls: bool
-    ) -> bool:
+    def run_one(self, job: dict, unit) -> bool:
         job_id = job["job_id"]
         attempt = job["attempt_count"]
 
-        # Lease Job
-        if not self.store.lease_job(job_id):
-            return False
-
         try:
+            import time
+
             start_time = time.time()
-            prompt = build_tagger_prompt(contains_code, contains_logs, contains_urls, content)
+            from scripts.semantic_tagger.worker import build_tagger_prompt
+
+            prompt = build_tagger_prompt(
+                unit.contains_code, unit.contains_logs, unit.contains_urls, unit.content
+            )
 
             # If attempt 2, add warning. If attempt 3, restrict concepts to 6 and drop relations
             if attempt == 1:
                 prompt += "\n\nOstatnia próba zakończyła się błędem schematu. Zwróć tylko 100% poprawne dane, używając poprawnego JSON."
             elif attempt == 2:
                 prompt += "\n\nOstatnia próba zakończyła się błędem schematu. Zwróć maksymalnie 6 pojęć i 0 relacji."
+
+            from scripts.semantic_tagger.schemas import TaggerOutput
 
             schema_json = TaggerOutput.model_json_schema()
 

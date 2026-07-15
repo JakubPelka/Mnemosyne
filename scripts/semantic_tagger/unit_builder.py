@@ -1,26 +1,34 @@
 from typing import List, Dict, Any
 from scripts.semantic_tagger.privacy import safe_hash
+from scripts.semantic_tagger.unit_serializer import serialize_semantic_unit, compute_content_hash
 
 
 class UnitBuilder:
     def __init__(
-        self, max_chars=18000, max_events=10, overlap_events=1, strategy_version="unit-v1"
+        self,
+        max_chars=18000,
+        max_events=10,
+        overlap_events=1,
+        strategy_version="unit-v1",
+        schema_version="semantic-tags-v1",
     ):
         self.max_chars = max_chars
         self.max_events = max_events
         self.overlap_events = overlap_events
         self.strategy_version = strategy_version
+        self.schema_version = schema_version
 
     def build_units_for_context(
         self, context_id: str, events: List[Dict[str, Any]], title: str = ""
     ) -> List[Dict[str, Any]]:
-        # Sort events by time
         events = sorted(events, key=lambda x: x.get("timestamp_start") or "")
 
         units = []
         current_unit = []
         current_chars = 0
         sequence_no = 1
+
+        # We need a way to track sequence in unit
 
         def commit_unit(unit_events, seq_no):
             if not unit_events:
@@ -33,18 +41,37 @@ class UnitBuilder:
             unit_id_raw = f"{context_id}|{seq_no}|{self.strategy_version}|{ordered_ids_str}"
             unit_id = f"unit-{safe_hash(unit_id_raw)}"
 
-            # Content Hash
-            normalized_content = ""
+            segments = []
+            segments_text = []
             chars = 0
-            for e in unit_events:
-                txt = (e.get("text") or "").strip()
-                normalized_content += f"[EVENT event_id={e['event_id']} role={e.get('event_type')}]\n{txt}\n[/EVENT]\n"
-                chars += len(txt)
 
-            content_hash_raw = (
-                f"{title}|{ordered_ids_str}|{normalized_content}|{self.strategy_version}"
+            for i, e in enumerate(unit_events):
+                txt = e.get("text") or ""
+                txt_len = len(txt)
+                seg = {
+                    "event_id": e["event_id"],
+                    "context_id": context_id,
+                    "role": e.get("event_type") or "unknown",
+                    "start_char": 0,
+                    "end_char": txt_len,
+                    "sequence_in_unit": i,
+                    "is_overlap": False,  # For this simple builder, we don't mark overlap accurately yet
+                }
+                segments.append(seg)
+                segments_text.append(txt)
+                chars += txt_len
+
+            manifest = {
+                "title_included": bool(title),
+                "title": title,
+                "unit_strategy_version": self.strategy_version,
+                "segments": segments,
+            }
+
+            canonical_content = serialize_semantic_unit(manifest, segments_text)
+            content_hash = compute_content_hash(
+                self.schema_version, self.strategy_version, canonical_content
             )
-            content_hash = safe_hash(content_hash_raw)
 
             return {
                 "unit_id": unit_id,
@@ -52,12 +79,12 @@ class UnitBuilder:
                 "sequence_no": seq_no,
                 "content_hash": content_hash,
                 "event_ids": event_ids,
+                "segments": manifest,
                 "event_count": len(event_ids),
                 "character_count": chars,
                 "estimated_token_count": chars // 4,
                 "first_event_at": unit_events[0].get("timestamp_start"),
                 "last_event_at": unit_events[-1].get("timestamp_start"),
-                "normalized_content": normalized_content,
                 "title": title,
             }
 
@@ -94,12 +121,5 @@ class UnitBuilder:
             u = commit_unit(current_unit, sequence_no)
             if u:
                 units.append(u)
-
-        # Analyze signals (code/logs)
-        for u in units:
-            content = u["normalized_content"]
-            u["contains_code"] = "```" in content or "def " in content or "function" in content
-            u["contains_logs"] = "ERROR" in content or "WARN" in content or "Traceback" in content
-            u["contains_urls"] = "http://" in content or "https://" in content
 
         return units
