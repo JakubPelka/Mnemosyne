@@ -67,21 +67,30 @@ export default function App() {
     return () => controller.abort();
   }, []);
 
+  const globalGraphControllerRef = useRef<AbortController | null>(null);
+  const graphRequestIdRef = useRef(0);
+
   useEffect(() => {
+    if (globalGraphControllerRef.current) {
+      globalGraphControllerRef.current.abort();
+    }
     const controller = new AbortController();
+    globalGraphControllerRef.current = controller;
+    const requestId = ++graphRequestIdRef.current;
+    
     setLoading(true);
     setError(null);
     api.graph(filters, selectedTopicId, controller.signal)
       .then((value) => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || graphRequestIdRef.current !== requestId) return;
         setGraph(value);
       })
       .catch((reason: Error) => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || graphRequestIdRef.current !== requestId) return;
         setError(reason.message);
       })
       .finally(() => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || graphRequestIdRef.current !== requestId) return;
         setLoading(false);
       });
     return () => controller.abort();
@@ -217,6 +226,12 @@ export default function App() {
 
   const runExplore = useCallback((query: string, offset = 0) => {
     if (!query.trim()) return;
+    
+    if (globalGraphControllerRef.current) {
+      globalGraphControllerRef.current.abort();
+    }
+    graphRequestIdRef.current = 0;
+
     setSelectedTopicId(null);
     setSelectionType("aggregate");
     setDetail(null);
