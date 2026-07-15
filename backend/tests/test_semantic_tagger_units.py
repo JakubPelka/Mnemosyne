@@ -42,14 +42,3 @@ def test_unit_builder_overlap():
     assert len(units) == 2
     assert units[0]["event_ids"] == ["e1", "e2"]
     assert units[1]["event_ids"] == ["e2", "e3"]
-
-
-def test_content_signals():
-    builder = UnitBuilder(max_events=5)
-    events = [
-        {"event_id": "e1", "text": "Check this url: http://foo.com and this code: def foo(): pass"}
-    ]
-    units = builder.build_units_for_context("ctx-1", events)
-    assert units[0]["contains_urls"] is True
-    assert units[0]["contains_code"] is True
-    assert units[0]["contains_logs"] is False

@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS conversation_consolidation (
 
 
 class JobStore:
+    EXPECTED_SCHEMA_VERSION = 2
     def __init__(self, db_path: Path = DB_PATH):
         self.db_path = db_path
         db_exists = self.db_path.exists()
