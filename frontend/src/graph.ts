@@ -16,21 +16,7 @@ export function aggregateNodeId(normalizedQuery: string): string {
 
 export function exploreGraph(result: ExploreResult): GraphResponse {
   const queryId = aggregateNodeId(result.normalized_query);
-  const exactMatches = [
-    ...result.matched_topics,
-    ...result.matched_terms.slice(0, 5),
-  ];
-  const nodes = new Map(
-    exactMatches.map((item) => [item.item_id, {
-      topic_id: item.item_id,
-      name: item.name,
-      category: item.layer === "topics" ? "topic" : "term",
-      message_count: item.message_count,
-      context_count: item.context_count,
-      first_seen_at: result.first_seen_at,
-      last_seen_at: result.last_seen_at,
-    }]),
-  );
+  const nodes = new Map();
   for (const neighbor of result.neighbors) {
     if (!nodes.has(neighbor.topic_id)) {
       nodes.set(neighbor.topic_id, {

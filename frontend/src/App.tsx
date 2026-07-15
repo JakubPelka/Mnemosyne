@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "./api";
 import { DEFAULT_FILTERS, monthFromDate } from "./filters";
@@ -49,6 +49,7 @@ export default function App() {
     const controller = new AbortController();
     api.meta(controller.signal)
       .then((value) => {
+        if (controller.signal.aborted) return;
         setMeta(value);
         const initial = {
           ...DEFAULT_FILTERS,
@@ -60,7 +61,8 @@ export default function App() {
         setFilters(initial);
       })
       .catch((reason: Error) => {
-        if (reason.name !== "AbortError") setError(reason.message);
+        if (controller.signal.aborted) return;
+        setError(reason.message);
       });
     return () => controller.abort();
   }, []);
@@ -70,11 +72,18 @@ export default function App() {
     setLoading(true);
     setError(null);
     api.graph(filters, selectedTopicId, controller.signal)
-      .then(setGraph)
-      .catch((reason: Error) => {
-        if (reason.name !== "AbortError") setError(reason.message);
+      .then((value) => {
+        if (controller.signal.aborted) return;
+        setGraph(value);
       })
-      .finally(() => setLoading(false));
+      .catch((reason: Error) => {
+        if (controller.signal.aborted) return;
+        setError(reason.message);
+      })
+      .finally(() => {
+        if (controller.signal.aborted) return;
+        setLoading(false);
+      });
     return () => controller.abort();
   }, [filters, selectedTopicId]);
 
@@ -99,13 +108,18 @@ export default function App() {
       ),
     ])
       .then(([topic, page]) => {
+        if (controller.signal.aborted) return;
         setDetail(topic);
         setOccurrences(page);
       })
       .catch((reason: Error) => {
-        if (reason.name !== "AbortError") setDetailError(reason.message);
+        if (controller.signal.aborted) return;
+        setDetailError(reason.message);
       })
-      .finally(() => setDetailLoading(false));
+      .finally(() => {
+        if (controller.signal.aborted) return;
+        setDetailLoading(false);
+      });
     return () => controller.abort();
   }, [filters, occurrenceOffset, selectedTopicId]);
 
@@ -117,9 +131,13 @@ export default function App() {
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       api.searchTopics(search.trim(), controller.signal)
-        .then((response) => setSearchResults(response.items))
+        .then((response) => {
+          if (controller.signal.aborted) return;
+          setSearchResults(response.items);
+        })
         .catch((reason: Error) => {
-          if (reason.name !== "AbortError") setDetailError(reason.message);
+          if (controller.signal.aborted) return;
+          setDetailError(reason.message);
         });
     }, 220);
     return () => {
@@ -136,9 +154,13 @@ export default function App() {
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
       api.searchEvents(contentSearch.trim(), contentScope, controller.signal)
-        .then((response) => setContentResults(response.items))
+        .then((response) => {
+          if (controller.signal.aborted) return;
+          setContentResults(response.items);
+        })
         .catch((reason: Error) => {
-          if (reason.name !== "AbortError") setDetailError(reason.message);
+          if (controller.signal.aborted) return;
+          setDetailError(reason.message);
         });
     }, 220);
     return () => {
@@ -191,6 +213,8 @@ export default function App() {
     setOccurrenceOffset(0);
   }, []);
 
+  const exploreControllerRef = useRef<AbortController | null>(null);
+
   const runExplore = useCallback((query: string, offset = 0) => {
     if (!query.trim()) return;
     setSelectedTopicId(null);
@@ -201,10 +225,26 @@ export default function App() {
     setOccurrenceOffset(offset);
     setDetailLoading(true);
     setDetailError(null);
-    api.explore(query.trim(), filters, OCCURRENCE_LIMIT, offset)
-      .then(setAggregate)
-      .catch((reason: Error) => setDetailError(reason.message))
-      .finally(() => setDetailLoading(false));
+    
+    if (exploreControllerRef.current) {
+      exploreControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    exploreControllerRef.current = controller;
+
+    api.explore(query.trim(), filters, OCCURRENCE_LIMIT, offset, controller.signal)
+      .then((value) => {
+        if (controller.signal.aborted) return;
+        setAggregate(value);
+      })
+      .catch((reason: Error) => {
+        if (controller.signal.aborted) return;
+        setDetailError(reason.message);
+      })
+      .finally(() => {
+        if (controller.signal.aborted) return;
+        setDetailLoading(false);
+      });
   }, [filters]);
 
   const changeDraftFilters = useCallback((next: GraphFilters) => {
