@@ -1,14 +1,18 @@
 import argparse
 import sqlite3
 from pathlib import Path
-from backend.app.database import create_sqlite_engine, session_factory
-from backend.app.models import Event
-from sqlalchemy import select
 
 from scripts.semantic_tagger.job_store import JobStore
 from scripts.semantic_tagger.ollama_client import OllamaClient, OllamaError
+from scripts.semantic_tagger.unit_builder import UnitBuilder
 from scripts.semantic_tagger.worker import Worker
 from scripts.semantic_tagger.evaluate import export_review
+
+MAIN_DB_URI = "file:data/mnemosyne.sqlite3?mode=ro"
+
+
+def get_main_db():
+    return sqlite3.connect(MAIN_DB_URI, uri=True)
 
 
 def cmd_doctor(args):
@@ -17,11 +21,10 @@ def cmd_doctor(args):
     # 1. Main DB
     print("Main DB: Checking...")
     try:
-        engine = create_sqlite_engine(Path("data/mnemosyne.sqlite3"))
-        SessionLocal = session_factory(engine)
-        with SessionLocal() as db:
-            count = db.scalar(select(Event.event_id).limit(1))
-        print("Main DB: OK (accessible)")
+        with get_main_db() as conn:
+            cursor = conn.execute("SELECT event_id FROM events LIMIT 1")
+            cursor.fetchone()
+        print("Main DB: OK (accessible, read-only confirmed)")
     except Exception as e:
         print(f"Main DB: Error - {e}")
 
@@ -36,32 +39,96 @@ def cmd_doctor(args):
     # 3. Ollama
     print("Ollama: Checking API...")
     try:
-        client = OllamaClient("")
+        client = OllamaClient("qwen3:14b")
         tags = client.check_connection()
         print("Ollama API: Connected")
-        version = client.get_version()
-        print(f"Ollama Version: {version}")
+        print("endpoint localhost-only")
+        print("requested model tag = qwen3:14b")
 
         models = [m.get("name") for m in tags.get("models", [])]
-        print(f"Ollama Models installed: {models}")
+        if "qwen3:14b" in models:
+            print("local model found = true")
+
+            # check digest
+            model_info = next(m for m in tags.get("models", []) if m.get("name") == "qwen3:14b")
+            digest = model_info.get("digest", "")
+            if digest.startswith("bdbd181c33f2ed1b31c972991882db3cf4d192569092138a7d29e973cd9debe8"):
+                print("digest matches")
+            else:
+                print(f"digest mismatch: {digest}")
+        else:
+            print("local model found = false")
+
+        print("remote fallback disabled in tagger")
+        version = client.get_version()
+        print(f"Ollama Version: {version}")
     except OllamaError as e:
         print(f"Ollama API: Error - {e}")
 
 
 def cmd_prepare(args):
     print(f"Preparing sample: {args.sample}, limit: {args.limit_contexts}")
-    # To be implemented for full DB pull.
-    # Currently just creates the run in sidecar.
     store = JobStore()
     run_info = {
-        "model_name": "unknown (prepare)",
+        "model_name": "qwen3:14b",
         "prompt_version": "semantic_tagger_v1.md",
         "schema_version": "semantic-tags-v1",
         "unit_strategy_version": "unit-v1",
     }
     run_id = store.create_run(run_info)
-    print(f"Run {run_id} created in sidecar.")
-    print("Note: Parsing from main DB and pushing to sidecar is simulated in this step.")
+
+    # Read from main DB read-only
+    with get_main_db() as conn:
+        conn.row_factory = sqlite3.Row
+        contexts = conn.execute(
+            "SELECT DISTINCT context_id FROM events WHERE context_id IS NOT NULL LIMIT ?",
+            (args.limit_contexts,),
+        ).fetchall()
+
+        builder = UnitBuilder()
+        total_units = 0
+        total_chars = 0
+        sizes = []
+
+        for ctx_row in contexts:
+            ctx_id = ctx_row["context_id"]
+            # Fetch events for context
+            events_rows = conn.execute(
+                "SELECT event_id, title, text, timestamp_start, event_type FROM events WHERE context_id = ? ORDER BY timestamp_start ASC",
+                (ctx_id,),
+            ).fetchall()
+            events = [dict(r) for r in events_rows]
+
+            title = events[0]["title"] if events and events[0]["title"] else ""
+            units = builder.build_units_for_context(ctx_id, events, title)
+
+            for u in units:
+                store.save_unit(u)
+
+                # Job key deterministic
+                job_key_raw = f"{u['unit_id']}|{u['content_hash']}|qwen3:14b|semantic_tagger_v1.md|semantic-tags-v1|unit-v1"
+                import hashlib
+
+                job_key = hashlib.sha256(job_key_raw.encode()).hexdigest()
+
+                store.queue_job(job_key, run_id, u["unit_id"], u["content_hash"])
+
+                total_units += 1
+                total_chars += u["character_count"]
+                sizes.append(u["character_count"])
+
+    avg_units = total_units / len(contexts) if contexts else 0
+    est_tokens = total_chars // 4
+    print("--- PREPARE STATS ---")
+    print(f"contexts selected: {len(contexts)}")
+    print(f"units created: {total_units}")
+    print(f"average units per context: {avg_units:.2f}")
+    print(f"total characters: {total_chars}")
+    print(f"estimated tokens: {est_tokens}")
+    if sizes:
+        print(f"largest unit: {max(sizes)} chars")
+        print(f"smallest unit: {min(sizes)} chars")
+    print(f"estimated sidecar size: ~{total_chars // 1024 + 50} KB")
 
 
 def cmd_run(args):

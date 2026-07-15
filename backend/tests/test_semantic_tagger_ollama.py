@@ -23,4 +23,4 @@ def test_ollama_integration():
     assert output.schema_version == "semantic-tags-v1"
 
     labels = [c.label.lower() for c in output.concepts]
-    assert any("mnemosyne" in l for l in labels)
+    assert any("mnemosyne" in lbl for lbl in labels)
