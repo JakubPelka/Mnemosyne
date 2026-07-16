@@ -51,8 +51,30 @@ class Worker:
                 )
                 return False
 
-            # Post validation: evidence_event_ids must be within the provided context, handled by client/schema if possible
-            # Here we just blindly trust it parsed through Pydantic. Further scrubbing can be done in consolidate.
+            # Post validation: evidence_event_ids must be within the provided context
+            valid_event_ids = set(unit.event_ids)
+            invalid_evidence = False
+            for concept in output.concepts:
+                for eid in concept.evidence_event_ids:
+                    if eid not in valid_event_ids:
+                        invalid_evidence = True
+                        break
+            for rel in output.relations:
+                for eid in rel.evidence_event_ids:
+                    if eid not in valid_event_ids:
+                        invalid_evidence = True
+                        break
+
+            if invalid_evidence:
+                self.store.fail_job(
+                    job_id,
+                    job["attempt_id"],
+                    job["lease_token"],
+                    "invalid_evidence",
+                    "Output contained evidence_event_ids not present in the unit",
+                    "validation",
+                )
+                return False
 
             elapsed_ms = int((time.time() - start_time) * 1000)
             output_json = output.model_dump_json()
@@ -68,6 +90,27 @@ class Worker:
                 p_tok,
                 c_tok,
             )
+
+            # Update vocabulary registry
+            try:
+                from scripts.semantic_tagger.vocabulary_store import VocabularyStore
+
+                vocab = VocabularyStore()
+                for concept in output.concepts:
+                    lang = concept.language if concept.language else "sv"
+                    for facet in concept.entity_types:
+                        vocab.upsert_concept("entity_type", facet.label, facet.confidence, lang)
+                    for facet in concept.domains:
+                        vocab.upsert_concept("domain", facet.label, facet.confidence, lang)
+                    for facet in concept.context_roles:
+                        vocab.upsert_concept("context_role", facet.label, facet.confidence, lang)
+                for rel in output.relations:
+                    vocab.upsert_concept(
+                        "relation_predicate", rel.predicate, rel.confidence, "en"
+                    )  # predicates are snake_case english
+            except Exception as e:
+                logger.warning(f"Failed to upsert vocabulary candidates for job {job_id}: {e}")
+
             return True
 
         except OllamaError as e:

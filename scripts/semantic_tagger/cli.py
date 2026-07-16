@@ -521,6 +521,128 @@ def cmd_export_review(args):
     print("Export complete.")
 
 
+def cmd_corpus_stats(args):
+    import statistics
+
+    print("Computing corpus stats (this may take a moment)...")
+    main_db_uri = "file:data/mnemosyne.sqlite3?mode=ro"
+
+    with sqlite3.connect(main_db_uri, uri=True) as conn:
+        conn.row_factory = sqlite3.Row
+        contexts_count = conn.execute("SELECT COUNT(DISTINCT context_id) FROM events").fetchone()[0]
+        events_count = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+
+        contexts = conn.execute("SELECT DISTINCT context_id FROM events").fetchall()
+
+        builder = UnitBuilder()
+        total_units = 0
+        total_empty = 0
+        all_chars = []
+        events_per_unit = []
+
+        for ctx in contexts:
+            ctx_id = ctx["context_id"]
+            ev_title = conn.execute(
+                "SELECT title FROM events WHERE context_id = ? AND title IS NOT NULL AND title != '' ORDER BY timestamp_start ASC LIMIT 1",
+                (ctx_id,),
+            ).fetchone()
+            title = ev_title["title"] if ev_title else ""
+
+            events = conn.execute(
+                "SELECT event_id, event_type, timestamp_start, text FROM events WHERE context_id = ? ORDER BY timestamp_start",
+                (ctx_id,),
+            ).fetchall()
+            events = [dict(e) for e in events]
+
+            units = builder.build_units_for_context(ctx_id, events, title)
+            for u in units:
+                total_units += 1
+                if u["character_count"] == 0:
+                    total_empty += 1
+                else:
+                    all_chars.append(u["character_count"])
+                    events_per_unit.append(u["event_count"])
+
+    old_sidecar = "file:data/semantic_tagger_exports/semantic_tagger_exploratory_tainted_20260716_110549.sqlite3?mode=ro"
+    times = []
+    try:
+        with sqlite3.connect(old_sidecar, uri=True) as conn:
+            rows = conn.execute(
+                "SELECT elapsed_ms FROM tagging_job WHERE status='done' AND elapsed_ms IS NOT NULL"
+            ).fetchall()
+            times = [r[0] for r in rows if r[0] > 0]
+    except Exception:
+        pass
+
+    inferable_units = total_units - total_empty
+
+    stats = {
+        "contexts": contexts_count,
+        "events": events_count,
+        "canonical_units_total": total_units,
+        "empty_or_rejected_units": total_empty,
+        "inferable_units": inferable_units,
+    }
+
+    if all_chars:
+        chars_sum = sum(all_chars)
+        stats["chars_sum"] = chars_sum
+        stats["chars_p50"] = statistics.median(all_chars)
+        stats["chars_p75"] = (
+            statistics.quantiles(all_chars, n=100)[74] if len(all_chars) > 1 else all_chars[0]
+        )
+        stats["chars_p90"] = (
+            statistics.quantiles(all_chars, n=100)[89] if len(all_chars) > 1 else all_chars[0]
+        )
+        stats["estimated_input_tokens"] = chars_sum // 4
+
+    if events_per_unit:
+        stats["events_per_unit_p50"] = statistics.median(events_per_unit)
+        stats["events_per_unit_max"] = max(events_per_unit)
+
+    if times:
+        stats["estimate_source"] = "exploratory_tainted_pilot"
+        stats["estimate_confidence"] = "low (num_predict=2048 was not enforced)"
+        stats["available_timing_measurements"] = len(times)
+
+        p50 = statistics.median(times)
+        p75 = statistics.quantiles(times, n=100)[74] if len(times) > 1 else times[0]
+        p90 = statistics.quantiles(times, n=100)[89] if len(times) > 1 else times[0]
+
+        stats["optimistic_seconds"] = (inferable_units * p50) / 1000.0
+        stats["likely_seconds"] = (inferable_units * p75) / 1000.0
+        stats["conservative_seconds"] = (inferable_units * p90) / 1000.0
+
+    out_path = Path("data/semantic_tagger_corpus_stats.local.json")
+    with open(out_path, "w") as f:
+        json.dump(stats, f, indent=2)
+
+    print(f"Stats written to {out_path}")
+    print(json.dumps(stats, indent=2))
+
+
+def cmd_vocabulary_candidates(args):
+    import sqlite3
+    from pathlib import Path
+
+    db_path = Path("data/semantic_vocabulary.local.sqlite3")
+    if not db_path.exists():
+        print("No vocabulary database found.")
+        return
+
+    print(f"--- Vocabulary Candidates (min_occurrences={args.min_occurrences}) ---")
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.execute(
+            "SELECT dimension, preferred_label, occurrence_count, max_confidence, status FROM vocabulary_candidate WHERE occurrence_count >= ? ORDER BY dimension, occurrence_count DESC",
+            (args.min_occurrences,),
+        )
+        for row in cursor:
+            print(
+                f"[{row['dimension']}] {row['preferred_label']} (count: {row['occurrence_count']}, max_conf: {row['max_confidence']:.2f}) - {row['status']}"
+            )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Semantic Tagger CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -565,6 +687,11 @@ def main():
 
     subparsers.add_parser("consolidate")
 
+    subparsers.add_parser("corpus-stats")
+
+    parser_vocab = subparsers.add_parser("vocabulary-candidates")
+    parser_vocab.add_argument("--min-occurrences", type=int, default=1)
+
     parser_export = subparsers.add_parser("export-review")
     parser_export.add_argument("--output", required=True)
     parser_export.add_argument(
@@ -581,7 +708,11 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "doctor":
+    if args.command == "corpus-stats":
+        cmd_corpus_stats(args)
+    elif args.command == "vocabulary-candidates":
+        cmd_vocabulary_candidates(args)
+    elif args.command == "doctor":
         cmd_doctor(args)
     elif args.command == "reset-sidecar":
         cmd_reset_sidecar(args)
