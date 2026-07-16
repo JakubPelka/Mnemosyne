@@ -6,14 +6,14 @@ from pathlib import Path
 from typing import Dict, Any, List
 
 DB_PATH = Path("data/semantic_tagger.local.sqlite3")
-EXPECTED_SCHEMA_VERSION = 2
+EXPECTED_SCHEMA_VERSION = 3
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sidecar_meta (
     key TEXT PRIMARY KEY,
     value TEXT
 );
-INSERT OR IGNORE INTO sidecar_meta (key, value) VALUES ('schema_version', '2');
+INSERT OR IGNORE INTO sidecar_meta (key, value) VALUES ('schema_version', '3');
 
 CREATE TABLE IF NOT EXISTS tagging_run (
     run_id TEXT PRIMARY KEY,
@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS tagging_job (
     attempt_count INTEGER DEFAULT 0,
     lease_started_at TEXT,
     lease_expires_at TEXT,
+    lease_token TEXT,
     started_at TEXT,
     completed_at TEXT,
     elapsed_ms INTEGER,
@@ -80,7 +81,34 @@ CREATE TABLE IF NOT EXISTS tagging_job (
     error_code TEXT,
     error_summary TEXT,
     prompt_tokens INTEGER,
-    completion_tokens INTEGER
+    completion_tokens INTEGER,
+    retry_requested_at TEXT,
+    retry_reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS tagging_attempt (
+    attempt_id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    attempt_no INTEGER NOT NULL,
+    worker_id TEXT NOT NULL,
+    lease_token TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    completed_at TEXT,
+    elapsed_ms INTEGER,
+    status TEXT NOT NULL,
+    error_code TEXT,
+    error_summary TEXT,
+    input_hash TEXT,
+    output_hash TEXT,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    done_reason TEXT,
+    request_timeout_seconds INTEGER NOT NULL,
+    num_predict INTEGER NOT NULL,
+    generation_config_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(job_id, attempt_no),
+    UNIQUE(lease_token)
 );
 
 CREATE TABLE IF NOT EXISTS conversation_consolidation (
@@ -102,7 +130,7 @@ CREATE TABLE IF NOT EXISTS conversation_consolidation (
 
 
 class JobStore:
-    EXPECTED_SCHEMA_VERSION = 2
+    EXPECTED_SCHEMA_VERSION = 3
 
     def __init__(self, db_path: Path = DB_PATH):
         self.db_path = db_path
@@ -188,19 +216,19 @@ class JobStore:
     def claim_next_job(
         self, run_id: str, worker_id: str, lease_seconds: int = 600
     ) -> Dict[str, Any]:
+        import hashlib
         with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
             conn.row_factory = sqlite3.Row
 
-            # Restore expired leases
             now = self._now()
+            conn.execute("UPDATE tagging_job SET status = 'failed' WHERE status = 'error'")
             conn.execute(
                 "UPDATE tagging_job SET status = 'pending' WHERE status = 'running' AND lease_expires_at < ?",
                 (now,),
             )
 
-            # Find next
             row = conn.execute(
-                "SELECT * FROM tagging_job WHERE run_id = ? AND status IN ('pending', 'error') AND attempt_count < 3 ORDER BY attempt_count ASC LIMIT 1",
+                "SELECT * FROM tagging_job WHERE run_id = ? AND status IN ('pending', 'failed') AND attempt_count < 3 ORDER BY attempt_count ASC LIMIT 1",
                 (run_id,),
             ).fetchone()
 
@@ -208,33 +236,60 @@ class JobStore:
                 return None
 
             job_id = row["job_id"]
+            
+            attempt_row = conn.execute("SELECT MAX(attempt_no) as m FROM tagging_attempt WHERE job_id = ?", (job_id,)).fetchone()
+            attempt_no = (attempt_row["m"] or 0) + 1
+            
+            attempt_id = str(uuid.uuid4())
+            lease_token = str(uuid.uuid4())
 
             import datetime
-
             dt_now = datetime.datetime.utcnow()
             expires = dt_now + datetime.timedelta(seconds=lease_seconds)
             now_str = dt_now.isoformat()
             expires_str = expires.isoformat()
+            
+            run_row = conn.execute("SELECT settings_json FROM tagging_run WHERE run_id = ?", (run_id,)).fetchone()
+            settings = json.loads(run_row["settings_json"]) if run_row else {}
+            num_predict = settings.get("num_predict", 2048)
+            request_timeout_seconds = settings.get("request_timeout_seconds", 3600)
+            
+            generation_config_hash = hashlib.sha256(json.dumps({
+                "think": settings.get("think", False),
+                "temperature": settings.get("temperature", 0),
+                "seed": settings.get("seed", 42),
+                "stream": settings.get("stream", False),
+                "num_predict": num_predict,
+                "request_timeout_seconds": request_timeout_seconds
+            }, sort_keys=True).encode()).hexdigest()
+            
+            conn.execute(
+                "INSERT INTO tagging_attempt (attempt_id, job_id, attempt_no, worker_id, lease_token, started_at, status, request_timeout_seconds, num_predict, generation_config_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)",
+                (attempt_id, job_id, attempt_no, worker_id, lease_token, now_str, request_timeout_seconds, num_predict, generation_config_hash, now_str)
+            )
 
             conn.execute(
-                "UPDATE tagging_job SET status = 'running', attempt_count = attempt_count + 1, lease_started_at = ?, lease_expires_at = ?, worker_id = ? WHERE job_id = ?",
-                (now_str, expires_str, worker_id, job_id),
+                "UPDATE tagging_job SET status = 'running', attempt_count = attempt_count + 1, lease_started_at = ?, lease_expires_at = ?, lease_token = ?, worker_id = ?, started_at = COALESCE(started_at, ?) WHERE job_id = ?",
+                (now_str, expires_str, lease_token, worker_id, now_str, job_id),
             )
 
             conn.commit()
-            return dict(
-                conn.execute("SELECT * FROM tagging_job WHERE job_id = ?", (job_id,)).fetchone()
-            )
+            
+            job_dict = dict(conn.execute("SELECT * FROM tagging_job WHERE job_id = ?", (job_id,)).fetchone())
+            job_dict["attempt_id"] = attempt_id
+            job_dict["lease_token"] = lease_token
+            job_dict["num_predict"] = num_predict
+            return job_dict
 
-    def renew_lease(self, worker_id: str, lease_seconds: int = 600):
+    def renew_lease(self, worker_id: str, lease_token: str, lease_seconds: int = 600):
         with sqlite3.connect(self.db_path) as conn:
             import datetime
 
             dt_now = datetime.datetime.utcnow()
             expires = dt_now + datetime.timedelta(seconds=lease_seconds)
             conn.execute(
-                "UPDATE tagging_job SET lease_expires_at = ? WHERE worker_id = ? AND status = 'running'",
-                (expires.isoformat(), worker_id),
+                "UPDATE tagging_job SET lease_expires_at = ? WHERE worker_id = ? AND lease_token = ? AND status = 'running'",
+                (expires.isoformat(), worker_id, lease_token),
             )
 
     def get_pending_jobs(self, run_id: str, limit: int = 10) -> List[Dict]:
@@ -242,13 +297,14 @@ class JobStore:
             conn.row_factory = sqlite3.Row
             # Restore expired leases
             now = self._now()
+            conn.execute("UPDATE tagging_job SET status = 'failed' WHERE status = 'error'")
             conn.execute(
                 "UPDATE tagging_job SET status = 'pending' WHERE status = 'running' AND lease_expires_at < ?",
                 (now,),
             )
 
             rows = conn.execute(
-                "SELECT * FROM tagging_job WHERE run_id = ? AND status IN ('pending', 'error') AND attempt_count < 3 ORDER BY attempt_count ASC LIMIT ?",
+                "SELECT * FROM tagging_job WHERE run_id = ? AND status IN ('pending', 'failed') AND attempt_count < 3 ORDER BY attempt_count ASC LIMIT ?",
                 (
                     run_id,
                     limit,
@@ -269,29 +325,41 @@ class JobStore:
     def complete_job(
         self,
         job_id: str,
+        attempt_id: str,
+        lease_token: str,
         output_json: str,
         output_hash: str,
         elapsed_ms: int,
         prompt_tokens: int,
         completion_tokens: int,
     ):
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
+            now = self._now()
+            row = conn.execute("SELECT * FROM tagging_job WHERE job_id = ? AND status = 'running' AND lease_token = ?", (job_id, lease_token)).fetchone()
+            if not row:
+                raise RuntimeError("Cannot complete job: lease expired or invalid token")
+                
             conn.execute(
                 "UPDATE tagging_job SET status = 'done', completed_at = ?, elapsed_ms = ?, output_json = ?, output_hash = ?, prompt_tokens = ?, completion_tokens = ? WHERE job_id = ?",
-                (
-                    self._now(),
-                    elapsed_ms,
-                    output_json,
-                    output_hash,
-                    prompt_tokens,
-                    completion_tokens,
-                    job_id,
-                ),
+                (now, elapsed_ms, output_json, output_hash, prompt_tokens, completion_tokens, job_id),
+            )
+            conn.execute(
+                "UPDATE tagging_attempt SET status = 'done', completed_at = ?, elapsed_ms = ?, output_hash = ?, prompt_tokens = ?, completion_tokens = ? WHERE attempt_id = ?",
+                (now, elapsed_ms, output_hash, prompt_tokens, completion_tokens, attempt_id)
             )
 
-    def fail_job(self, job_id: str, error_code: str, error_summary: str):
-        with sqlite3.connect(self.db_path) as conn:
+    def fail_job(self, job_id: str, attempt_id: str, lease_token: str, error_code: str, error_summary: str, done_reason: str = None):
+        with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
+            now = self._now()
+            row = conn.execute("SELECT * FROM tagging_job WHERE job_id = ? AND status = 'running' AND lease_token = ?", (job_id, lease_token)).fetchone()
+            if not row:
+                raise RuntimeError("Cannot fail job: lease expired or invalid token")
+                
             conn.execute(
-                "UPDATE tagging_job SET status = 'error', error_code = ?, error_summary = ? WHERE job_id = ?",
+                "UPDATE tagging_job SET status = 'failed', error_code = ?, error_summary = ? WHERE job_id = ?",
                 (error_code, error_summary, job_id),
+            )
+            conn.execute(
+                "UPDATE tagging_attempt SET status = 'failed', completed_at = ?, error_code = ?, error_summary = ?, done_reason = ? WHERE attempt_id = ?",
+                (now, error_code, error_summary, done_reason, attempt_id)
             )
