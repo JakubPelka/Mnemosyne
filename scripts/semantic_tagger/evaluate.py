@@ -4,8 +4,26 @@ from pathlib import Path
 from scripts.semantic_tagger.consolidate import consolidate_conversation
 
 
-def export_review(db_path: Path, output_yaml_path: Path):
-    with sqlite3.connect(db_path) as conn:
+def export_review(
+    db_path: Path,
+    output_yaml_path: Path,
+    status: str = "review",
+    audit_db_sha256: str = None,
+    audit_db_snapshot_date: str = None,
+):
+    # Verify SHA-256
+    import hashlib
+
+    with open(db_path, "rb") as f:
+        file_sha256 = hashlib.sha256(f.read()).hexdigest()
+
+    if audit_db_sha256 and file_sha256 != audit_db_sha256:
+        raise ValueError(
+            f"Database SHA-256 mismatch. Expected {audit_db_sha256}, got {file_sha256}"
+        )
+
+    db_uri = f"file:{db_path.absolute()}?mode=ro"
+    with sqlite3.connect(db_uri, uri=True) as conn:
         conn.row_factory = sqlite3.Row
         contexts = conn.execute(
             "SELECT DISTINCT u.context_id FROM tagging_job j JOIN tagging_unit u ON j.unit_id = u.unit_id WHERE j.status = 'done'"
@@ -19,8 +37,7 @@ def export_review(db_path: Path, output_yaml_path: Path):
 
         if not consolidated.primary_concepts and not consolidated.secondary_concepts:
             continue
-
-        with sqlite3.connect(db_path) as conn:
+        with sqlite3.connect(db_uri, uri=True) as conn:
             units_count = conn.execute(
                 "SELECT COUNT(DISTINCT unit_id) FROM tagging_unit WHERE context_id = ?", (ctx_id,)
             ).fetchone()[0]
@@ -57,5 +74,14 @@ def export_review(db_path: Path, output_yaml_path: Path):
         }
         review_data.append(entry)
 
+    final_data = {
+        "status": status,
+        "audit_integrity": "compromised_by_manual_sidecar_updates"
+        if status == "exploratory"
+        else "verified",
+        "source_sha256": file_sha256,
+        "reviews": review_data,
+    }
+
     with open(output_yaml_path, "w", encoding="utf-8") as f:
-        yaml.dump(review_data, f, allow_unicode=True, sort_keys=False)
+        yaml.dump(final_data, f, allow_unicode=True, sort_keys=False)

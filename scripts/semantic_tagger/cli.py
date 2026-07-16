@@ -2,6 +2,7 @@ import argparse
 import sqlite3
 import time
 import json
+import sys
 from pathlib import Path
 
 from scripts.semantic_tagger.job_store import JobStore
@@ -104,13 +105,15 @@ def cmd_prepare(args):
         "prompt_version": "semantic_tagger_v1.md",
         "schema_version": "semantic-tags-v1",
         "unit_strategy_version": "unit-v2-whole-events",
-        "settings_json": json.dumps({
-            "think": False,
-            "temperature": 0,
-            "stream": False,
-            "timeout": 600,
-            "endpoint": "http://127.0.0.1:11434"
-        })
+        "settings_json": json.dumps(
+            {
+                "think": False,
+                "temperature": 0,
+                "stream": False,
+                "timeout": 600,
+                "endpoint": "http://127.0.0.1:11434",
+            }
+        ),
     }
     run_id = store.create_run(run_info)
 
@@ -200,8 +203,6 @@ def cmd_worker(args):
 
     run_worker_loop(args.model, args.run_id, args.max_claims, args.target_done)
 
-    run_worker_loop(args.model, args.run_id, args.max_jobs)
-
 
 def cmd_pause(args):
     run_id, store = get_active_run_id()
@@ -265,7 +266,6 @@ def calc_eta(completed_times, pending_count):
 
 
 def cmd_status(args):
-    import time
     import sqlite3
 
     run_id, store = get_active_run_id()
@@ -473,6 +473,7 @@ def cmd_status(args):
 def cmd_retry_job(args):
     from scripts.semantic_tagger.job_store import JobStore
     import sqlite3
+
     store = JobStore()
     with sqlite3.connect(store.db_path, isolation_level="IMMEDIATE") as conn:
         conn.row_factory = sqlite3.Row
@@ -480,24 +481,43 @@ def cmd_retry_job(args):
         row = conn.execute("SELECT * FROM tagging_job WHERE job_id = ?", (args.job_id,)).fetchone()
         if not row:
             print(f"Error: Job {args.job_id} not found.")
-            import sys; sys.exit(1)
+            sys.exit(1)
         if args.run_id and row["run_id"] != args.run_id:
             print(f"Error: Job belongs to run {row['run_id']} not {args.run_id}")
-            import sys; sys.exit(1)
+            sys.exit(1)
         if row["status"] in ("done", "running"):
             print(f"Error: Cannot retry job in status {row['status']}")
-            import sys; sys.exit(1)
-        
-        conn.execute("UPDATE tagging_job SET status = 'pending', retry_requested_at = ?, retry_reason = ? WHERE job_id = ?", (now, args.reason, args.job_id))
+            sys.exit(1)
+
+        conn.execute(
+            "UPDATE tagging_job SET status = 'pending', retry_requested_at = ?, retry_reason = ? WHERE job_id = ?",
+            (now, args.reason, args.job_id),
+        )
         print(f"Job {args.job_id} set to pending for retry.")
+
 
 def cmd_consolidate(args):
     print("Consolidation would happen here, writing to conversation_consolidation table.")
 
 
 def cmd_export_review(args):
+    source_db = (
+        getattr(args, "source_db", None)
+        or getattr(args, "db_path", None)
+        or "data/semantic_tagger.local.sqlite3"
+    )
+    expected_sha = getattr(args, "source_sha256", None) or getattr(args, "audit_db_sha256", None)
+    status = getattr(args, "status", "review")
+    snap_date = getattr(args, "audit_db_snapshot_date", None)
+
     print(f"Exporting review to {args.output}")
-    export_review(Path("data/semantic_tagger.local.sqlite3"), Path(args.output))
+    export_review(
+        Path(source_db),
+        Path(args.output),
+        status=status,
+        audit_db_sha256=expected_sha,
+        audit_db_snapshot_date=snap_date,
+    )
     print("Export complete.")
 
 
@@ -547,6 +567,17 @@ def main():
 
     parser_export = subparsers.add_parser("export-review")
     parser_export.add_argument("--output", required=True)
+    parser_export.add_argument(
+        "--source-db", help="Path to specific sqlite3 database to export from"
+    )
+    parser_export.add_argument("--db-path", help="Alias for --source-db")
+    parser_export.add_argument("--status", default="review", help="Status to record in export")
+    parser_export.add_argument(
+        "--source-sha256",
+        help="SHA256 of the frozen SQLite database used for this export to verify",
+    )
+    parser_export.add_argument("--audit-db-sha256", help="Legacy alias for --source-sha256")
+    parser_export.add_argument("--audit-db-snapshot-date", help="Date of the snapshot")
 
     args = parser.parse_args()
 

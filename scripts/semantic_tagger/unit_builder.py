@@ -12,6 +12,11 @@ class UnitBuilder:
         strategy_version="unit-v2-whole-events",
         schema_version="semantic-tags-v1",
     ):
+        if max_events < 1:
+            raise ValueError("max_events must be at least 1")
+        if overlap_events < 0:
+            raise ValueError("overlap_events must be at least 0")
+
         self.max_chars = max_chars
         self.max_events = max_events
         self.overlap_events = overlap_events
@@ -112,7 +117,17 @@ class UnitBuilder:
         idx = 0
         overlap_events_list = set()
 
+        last_idx = -1
+        last_unit_len = -1
+
         while idx < len(events):
+            if idx == last_idx and len(current_unit) >= last_unit_len:
+                raise RuntimeError(
+                    "UnitBuilder progress invariant violated (infinite loop detected)."
+                )
+            last_idx = idx
+            last_unit_len = len(current_unit)
+
             e = events[idx]
             txt_len = len((e.get("text") or ""))
 
@@ -127,7 +142,10 @@ class UnitBuilder:
                 sequence_no += 1
 
                 # CRITICAL FIX 3: overlap carry logic to avoid fake overlaps
-                carry_len = min(self.overlap_events, len(current_unit))
+                # Prevent infinite loop if overlap_events >= max_events
+                carry_len = max(
+                    0, min(self.overlap_events, self.max_events - 1, len(current_unit) - 1)
+                )
                 if carry_len > 0:
                     carry = current_unit[-carry_len:]
                 else:

@@ -35,7 +35,21 @@ class Worker:
 
             schema_json = TaggerOutput.model_json_schema()
 
-            output, p_tok, c_tok = self.client.generate_tags(prompt, schema_json)
+            num_predict = job.get("num_predict", 2048)
+            seed = job.get("seed", 42)
+            output, p_tok, c_tok, done_reason = self.client.generate_tags(
+                prompt, schema_json, num_predict, seed
+            )
+            if done_reason == "length" or c_tok >= num_predict:
+                self.store.fail_job(
+                    job_id,
+                    job["attempt_id"],
+                    job["lease_token"],
+                    "output_truncated",
+                    "Output exceeded num_predict limit",
+                    done_reason,
+                )
+                return False
 
             # Post validation: evidence_event_ids must be within the provided context, handled by client/schema if possible
             # Here we just blindly trust it parsed through Pydantic. Further scrubbing can be done in consolidate.
@@ -44,16 +58,29 @@ class Worker:
             output_json = output.model_dump_json()
             output_hash = safe_hash(output_json)
 
-            self.store.complete_job(job_id, output_json, output_hash, elapsed_ms, p_tok, c_tok)
+            self.store.complete_job(
+                job_id,
+                job["attempt_id"],
+                job["lease_token"],
+                output_json,
+                output_hash,
+                elapsed_ms,
+                p_tok,
+                c_tok,
+            )
             return True
 
         except OllamaError as e:
             error_msg = str(e)
             logger.error(f"Job {job_id} failed on attempt {attempt}: {error_msg}")
-            self.store.fail_job(job_id, "ollama_error", error_msg[:200])
+            self.store.fail_job(
+                job_id, job["attempt_id"], job["lease_token"], "ollama_error", error_msg[:200]
+            )
             return False
         except Exception as e:
             error_msg = str(e)
             logger.exception(f"Job {job_id} failed unexpectedly on attempt {attempt}: {error_msg}")
-            self.store.fail_job(job_id, "system_error", error_msg[:200])
+            self.store.fail_job(
+                job_id, job["attempt_id"], job["lease_token"], "system_error", error_msg[:200]
+            )
             return False

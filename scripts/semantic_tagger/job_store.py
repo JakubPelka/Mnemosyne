@@ -217,6 +217,7 @@ class JobStore:
         self, run_id: str, worker_id: str, lease_seconds: int = 600
     ) -> Dict[str, Any]:
         import hashlib
+
         with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
             conn.row_factory = sqlite3.Row
 
@@ -228,7 +229,7 @@ class JobStore:
             )
 
             row = conn.execute(
-                "SELECT * FROM tagging_job WHERE run_id = ? AND status IN ('pending', 'failed') AND attempt_count < 3 ORDER BY attempt_count ASC LIMIT 1",
+                "SELECT * FROM tagging_job WHERE run_id = ? AND status = 'pending' AND attempt_count < 3 ORDER BY attempt_count ASC LIMIT 1",
                 (run_id,),
             ).fetchone()
 
@@ -236,36 +237,57 @@ class JobStore:
                 return None
 
             job_id = row["job_id"]
-            
-            attempt_row = conn.execute("SELECT MAX(attempt_no) as m FROM tagging_attempt WHERE job_id = ?", (job_id,)).fetchone()
+
+            attempt_row = conn.execute(
+                "SELECT MAX(attempt_no) as m FROM tagging_attempt WHERE job_id = ?", (job_id,)
+            ).fetchone()
             attempt_no = (attempt_row["m"] or 0) + 1
-            
+
             attempt_id = str(uuid.uuid4())
             lease_token = str(uuid.uuid4())
 
             import datetime
+
             dt_now = datetime.datetime.utcnow()
             expires = dt_now + datetime.timedelta(seconds=lease_seconds)
             now_str = dt_now.isoformat()
             expires_str = expires.isoformat()
-            
-            run_row = conn.execute("SELECT settings_json FROM tagging_run WHERE run_id = ?", (run_id,)).fetchone()
+
+            run_row = conn.execute(
+                "SELECT settings_json FROM tagging_run WHERE run_id = ?", (run_id,)
+            ).fetchone()
             settings = json.loads(run_row["settings_json"]) if run_row else {}
             num_predict = settings.get("num_predict", 2048)
             request_timeout_seconds = settings.get("request_timeout_seconds", 3600)
-            
-            generation_config_hash = hashlib.sha256(json.dumps({
-                "think": settings.get("think", False),
-                "temperature": settings.get("temperature", 0),
-                "seed": settings.get("seed", 42),
-                "stream": settings.get("stream", False),
-                "num_predict": num_predict,
-                "request_timeout_seconds": request_timeout_seconds
-            }, sort_keys=True).encode()).hexdigest()
-            
+
+            generation_config_hash = hashlib.sha256(
+                json.dumps(
+                    {
+                        "think": settings.get("think", False),
+                        "temperature": settings.get("temperature", 0),
+                        "seed": settings.get("seed", 42),
+                        "stream": settings.get("stream", False),
+                        "num_predict": num_predict,
+                        "request_timeout_seconds": request_timeout_seconds,
+                    },
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
+
             conn.execute(
                 "INSERT INTO tagging_attempt (attempt_id, job_id, attempt_no, worker_id, lease_token, started_at, status, request_timeout_seconds, num_predict, generation_config_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)",
-                (attempt_id, job_id, attempt_no, worker_id, lease_token, now_str, request_timeout_seconds, num_predict, generation_config_hash, now_str)
+                (
+                    attempt_id,
+                    job_id,
+                    attempt_no,
+                    worker_id,
+                    lease_token,
+                    now_str,
+                    request_timeout_seconds,
+                    num_predict,
+                    generation_config_hash,
+                    now_str,
+                ),
             )
 
             conn.execute(
@@ -274,11 +296,14 @@ class JobStore:
             )
 
             conn.commit()
-            
-            job_dict = dict(conn.execute("SELECT * FROM tagging_job WHERE job_id = ?", (job_id,)).fetchone())
+
+            job_dict = dict(
+                conn.execute("SELECT * FROM tagging_job WHERE job_id = ?", (job_id,)).fetchone()
+            )
             job_dict["attempt_id"] = attempt_id
             job_dict["lease_token"] = lease_token
             job_dict["num_predict"] = num_predict
+            job_dict["seed"] = settings.get("seed", 42)
             return job_dict
 
     def renew_lease(self, worker_id: str, lease_token: str, lease_seconds: int = 600):
@@ -304,7 +329,7 @@ class JobStore:
             )
 
             rows = conn.execute(
-                "SELECT * FROM tagging_job WHERE run_id = ? AND status IN ('pending', 'failed') AND attempt_count < 3 ORDER BY attempt_count ASC LIMIT ?",
+                "SELECT * FROM tagging_job WHERE run_id = ? AND status = 'pending' AND attempt_count < 3 ORDER BY attempt_count ASC LIMIT ?",
                 (
                     run_id,
                     limit,
@@ -334,32 +359,71 @@ class JobStore:
         completion_tokens: int,
     ):
         with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
+            conn.row_factory = sqlite3.Row
             now = self._now()
-            row = conn.execute("SELECT * FROM tagging_job WHERE job_id = ? AND status = 'running' AND lease_token = ?", (job_id, lease_token)).fetchone()
+            row = conn.execute(
+                "SELECT * FROM tagging_job WHERE job_id = ? AND status = 'running' AND lease_token = ?",
+                (job_id, lease_token),
+            ).fetchone()
             if not row:
                 raise RuntimeError("Cannot complete job: lease expired or invalid token")
-                
+
             conn.execute(
                 "UPDATE tagging_job SET status = 'done', completed_at = ?, elapsed_ms = ?, output_json = ?, output_hash = ?, prompt_tokens = ?, completion_tokens = ? WHERE job_id = ?",
-                (now, elapsed_ms, output_json, output_hash, prompt_tokens, completion_tokens, job_id),
+                (
+                    now,
+                    elapsed_ms,
+                    output_json,
+                    output_hash,
+                    prompt_tokens,
+                    completion_tokens,
+                    job_id,
+                ),
             )
             conn.execute(
                 "UPDATE tagging_attempt SET status = 'done', completed_at = ?, elapsed_ms = ?, output_hash = ?, prompt_tokens = ?, completion_tokens = ? WHERE attempt_id = ?",
-                (now, elapsed_ms, output_hash, prompt_tokens, completion_tokens, attempt_id)
+                (now, elapsed_ms, output_hash, prompt_tokens, completion_tokens, attempt_id),
             )
 
-    def fail_job(self, job_id: str, attempt_id: str, lease_token: str, error_code: str, error_summary: str, done_reason: str = None):
+    def retry_job(self, job_id: str, reason: str):
         with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
+            conn.row_factory = sqlite3.Row
             now = self._now()
-            row = conn.execute("SELECT * FROM tagging_job WHERE job_id = ? AND status = 'running' AND lease_token = ?", (job_id, lease_token)).fetchone()
+            row = conn.execute("SELECT * FROM tagging_job WHERE job_id = ?", (job_id,)).fetchone()
+            if not row:
+                raise RuntimeError(f"Job {job_id} not found")
+            if row["status"] in ("done", "running"):
+                raise RuntimeError(f"Cannot retry job in status {row['status']}")
+
+            conn.execute(
+                "UPDATE tagging_job SET status = 'pending', retry_requested_at = ?, retry_reason = ? WHERE job_id = ?",
+                (now, reason, job_id),
+            )
+
+    def fail_job(
+        self,
+        job_id: str,
+        attempt_id: str,
+        lease_token: str,
+        error_code: str,
+        error_summary: str,
+        done_reason: str = None,
+    ):
+        with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
+            conn.row_factory = sqlite3.Row
+            now = self._now()
+            row = conn.execute(
+                "SELECT * FROM tagging_job WHERE job_id = ? AND status = 'running' AND lease_token = ?",
+                (job_id, lease_token),
+            ).fetchone()
             if not row:
                 raise RuntimeError("Cannot fail job: lease expired or invalid token")
-                
+
             conn.execute(
                 "UPDATE tagging_job SET status = 'failed', error_code = ?, error_summary = ? WHERE job_id = ?",
                 (error_code, error_summary, job_id),
             )
             conn.execute(
                 "UPDATE tagging_attempt SET status = 'failed', completed_at = ?, error_code = ?, error_summary = ?, done_reason = ? WHERE attempt_id = ?",
-                (now, error_code, error_summary, done_reason, attempt_id)
+                (now, error_code, error_summary, done_reason, attempt_id),
             )

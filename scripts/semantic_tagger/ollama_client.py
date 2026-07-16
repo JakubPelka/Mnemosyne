@@ -34,13 +34,15 @@ class OllamaClient:
         except Exception:
             return "unknown"
 
-    def generate_tags(self, prompt: str, schema_json: dict) -> Tuple[TaggerOutput, int, int]:
+    def generate_tags(
+        self, prompt: str, schema_json: dict, num_predict: int = 2048, seed: int = 42
+    ) -> Tuple[TaggerOutput, int, int, str]:
         payload = {
             "model": self.model,
             "prompt": prompt,
             "stream": False,
             "format": schema_json,
-            "options": {"temperature": 0.0},
+            "options": {"temperature": 0.0, "num_predict": num_predict, "seed": seed},
         }
 
         req = urllib.request.Request(
@@ -65,7 +67,8 @@ class OllamaClient:
                 try:
                     parsed_json = json.loads(output_text)
                     valid_output = TaggerOutput(**parsed_json)
-                    return valid_output, prompt_tokens, completion_tokens
+                    done_reason = resp_data.get("done_reason", "")
+                    return valid_output, prompt_tokens, completion_tokens, done_reason
                 except json.JSONDecodeError as e:
                     raise OllamaError(f"Invalid JSON returned: {e}")
                 except ValidationError as e:

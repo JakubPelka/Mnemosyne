@@ -20,7 +20,11 @@ def _normalize(text: str) -> str:
 
 def consolidate_conversation(context_id: str, db_path: str) -> ConversationConsolidationOutput:
     # 1. Fetch all done jobs for this context
-    with sqlite3.connect(db_path) as conn:
+    if not db_path.startswith("file:"):
+        import pathlib
+
+        db_path = f"file:{pathlib.Path(db_path).absolute()}?mode=ro"
+    with sqlite3.connect(db_path, uri=True) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """

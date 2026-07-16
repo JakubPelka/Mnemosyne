@@ -30,7 +30,6 @@ class HeartbeatThread(threading.Thread):
                         (now, self.run_id, self.worker_id),
                     )
                     conn.commit()
-                    JobStore().renew_lease(self.worker_id)
                 except sqlite3.OperationalError:
                     pass
                 for _ in range(10):
@@ -45,7 +44,8 @@ class HeartbeatThread(threading.Thread):
 def run_worker_loop(
     model_name: str,
     target_run_id: str = None,
-    max_jobs: int = 0,
+    max_claims: int = 0,
+    target_done: int = 0,
     schema_version="semantic-tags-v1",
     strategy_version="unit-v1",
     store: JobStore = None,
@@ -121,6 +121,7 @@ def run_worker_loop(
     worker = Worker(store, client)
 
     jobs_claimed_this_session = 0
+    stop_signal_received = False
 
     try:
         while True:
@@ -134,19 +135,22 @@ def run_worker_loop(
                 ).fetchone()
                 if w_state:
                     if w_state[0]:
-                        heartbeat_thread.running = False
+                        heartbeat.running = False
                         print("Pause requested. Exiting.")
                         break
                     if w_state[1]:
                         print("Stop after current requested. Will exit after this job.")
                         stop_signal_received = True
-                
+
                 if target_done > 0:
-                    done_count = conn.execute("SELECT COUNT(*) FROM tagging_job WHERE run_id = ? AND status = 'done'", (target_run_id,)).fetchone()[0]
+                    done_count = conn.execute(
+                        "SELECT COUNT(*) FROM tagging_job WHERE run_id = ? AND status = 'done'",
+                        (target_run_id,),
+                    ).fetchone()[0]
                     if done_count >= target_done:
                         print(f"Target done count ({target_done}) reached. Exiting.")
                         break
-                        
+
             if max_claims > 0 and jobs_claimed_this_session >= max_claims:
                 print(f"Max claims limit ({max_claims}) reached. Exiting worker loop.")
                 break
@@ -156,9 +160,10 @@ def run_worker_loop(
             if not job:
                 # Sleep and poll again
                 import time
+
                 time.sleep(2)
                 continue
-                
+
             jobs_claimed_this_session += 1
             print(f"Processing job {job['job_id']}...")
 
@@ -174,7 +179,10 @@ def run_worker_loop(
             # Reconstruct Unit
             try:
                 unit = load_and_reconstruct_unit(
-                    job["unit_id"], str(store.db_path), run_row["schema_version"], run_row["unit_strategy_version"]
+                    job["unit_id"],
+                    str(store.db_path),
+                    run_row["schema_version"],
+                    run_row["unit_strategy_version"],
                 )
 
                 # Double check content hash (load_and_reconstruct_unit already throws if mismatch)
@@ -189,8 +197,6 @@ def run_worker_loop(
             except Exception as e:
                 print(f"Job {job['job_id']} failed unexpected: {e}")
                 store.fail_job(job["job_id"], "unexpected_error", str(e))
-
-            jobs_processed += 1
 
             with sqlite3.connect(store.db_path) as conn:
                 import datetime
