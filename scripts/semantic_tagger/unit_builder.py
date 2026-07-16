@@ -10,7 +10,7 @@ class UnitBuilder:
         max_events=10,
         overlap_events=1,
         strategy_version="unit-v2-whole-events",
-        schema_version="semantic-tags-v1",
+        schema_version="semantic-tags-v2",
     ):
         if max_events < 1:
             raise ValueError("max_events must be at least 1")

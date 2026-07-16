@@ -46,7 +46,7 @@ def run_worker_loop(
     target_run_id: str = None,
     max_claims: int = 0,
     target_done: int = 0,
-    schema_version="semantic-tags-v1",
+    schema_version="semantic-tags-v2",
     strategy_version="unit-v1",
     store: JobStore = None,
 ):
