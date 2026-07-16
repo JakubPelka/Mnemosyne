@@ -19,7 +19,7 @@ class Worker:
             import time
 
             start_time = time.time()
-            from scripts.semantic_tagger.worker import build_tagger_prompt
+            from scripts.semantic_tagger.prompt_builder import build_tagger_prompt
 
             prompt = build_tagger_prompt(
                 unit.contains_code, unit.contains_logs, unit.contains_urls, unit.content

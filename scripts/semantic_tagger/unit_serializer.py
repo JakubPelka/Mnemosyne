@@ -12,9 +12,11 @@ def normalize_unit_text(text: str) -> str:
     return "\n".join(lines)
 
 
-def serialize_semantic_unit(manifest: Dict[str, Any], segments_text: List[str], title_text: str = "") -> str:
+def serialize_semantic_unit(
+    manifest: Dict[str, Any], segments_text: List[str], title_text: str = ""
+) -> str:
     parts = []
-    
+
     # Title
     parts.append("[CONTEXT_TITLE]")
     if manifest.get("title_included") and title_text:

@@ -36,7 +36,7 @@ def load_and_reconstruct_unit(
         segments_json = unit_row["segments_json"]
         if not segments_json:
             raise ValueError(f"Unit {unit_id} has no segments_json.")
-            
+
         manifest = json.loads(segments_json)
         stored_content_hash = unit_row["content_hash"]
         expected_context_id = unit_row["context_id"]
@@ -45,14 +45,14 @@ def load_and_reconstruct_unit(
     title_text = ""
     with sqlite3.connect(MAIN_DB_URI, uri=True) as main_conn:
         main_conn.row_factory = sqlite3.Row
-        
+
         if manifest.get("title_included"):
             # assuming title is from first event or context table, Mnemosyne seems to store title on events
             # We'll just fetch title from any event in context_id where title is not null/empty
             ctx_id = manifest.get("title_source", expected_context_id)
             ev = main_conn.execute(
                 "SELECT title FROM events WHERE context_id = ? AND title IS NOT NULL AND title != '' ORDER BY timestamp_start ASC LIMIT 1",
-                (ctx_id,)
+                (ctx_id,),
             ).fetchone()
             if ev:
                 title_text = ev["title"]

@@ -31,12 +31,12 @@ def test_job_resume_and_skip():
 
         # 1. Job 1 is done
         job1 = next(j for j in pending if j["job_key"] == "key1")
-        store.claim_next_job(run_id, "w1") # To transition to running state
+        store.claim_next_job(run_id, "w1")  # To transition to running state
         store.complete_job(job1["job_id"], "{}", "out_hash", 100, 10, 10)
 
         # 2. Job 2 is interrupted (running, but expired lease)
         next(j for j in pending if j["job_key"] == "key2")
-        store.claim_next_job(run_id, "w1", lease_seconds=-10) # To transition to running state
+        store.claim_next_job(run_id, "w1", lease_seconds=-10)  # To transition to running state
 
         # 3. Job 3 remains pending untouched
 

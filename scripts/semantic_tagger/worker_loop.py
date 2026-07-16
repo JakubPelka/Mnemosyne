@@ -163,7 +163,7 @@ def run_worker_loop(
             # Reconstruct Unit
             try:
                 unit = load_and_reconstruct_unit(
-                    job["unit_id"], str(store.db_path), schema_version, strategy_version
+                    job["unit_id"], str(store.db_path), run_row["schema_version"], run_row["unit_strategy_version"]
                 )
 
                 # Double check content hash (load_and_reconstruct_unit already throws if mismatch)
