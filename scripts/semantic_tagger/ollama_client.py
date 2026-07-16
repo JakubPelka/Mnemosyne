@@ -51,7 +51,7 @@ class OllamaClient:
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=600) as response:
+            with urllib.request.urlopen(req, timeout=3600) as response:
                 resp_data = json.loads(response.read().decode("utf-8"))
 
                 if "error" in resp_data:
