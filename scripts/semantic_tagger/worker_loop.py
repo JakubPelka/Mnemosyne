@@ -120,35 +120,46 @@ def run_worker_loop(
     client = OllamaClient(model_name)
     worker = Worker(store, client)
 
-    jobs_processed = 0
+    jobs_claimed_this_session = 0
 
     try:
         while True:
-            if max_jobs > 0 and jobs_processed >= max_jobs:
-                print(f"Max jobs limit ({max_jobs}) reached. Exiting worker loop.")
+            if stop_signal_received:
                 break
 
-            # Check worker state
             with sqlite3.connect(store.db_path) as conn:
-                conn.row_factory = sqlite3.Row
-                state = conn.execute(
+                w_state = conn.execute(
                     "SELECT pause_requested, stop_after_current_requested FROM worker_state WHERE run_id = ? AND worker_id = ?",
-                    (run_id, worker_id),
+                    (target_run_id, worker_id),
                 ).fetchone()
-
-                if state:
-                    if state["stop_after_current_requested"]:
-                        print("Stop requested. Exiting worker loop.")
+                if w_state:
+                    if w_state[0]:
+                        heartbeat_thread.running = False
+                        print("Pause requested. Exiting.")
                         break
-                    if state["pause_requested"]:
-                        time.sleep(2)
-                        continue
-
-            job = store.claim_next_job(run_id, worker_id)
-            if not job:
-                print("No more pending jobs. Exiting worker loop.")
+                    if w_state[1]:
+                        print("Stop after current requested. Will exit after this job.")
+                        stop_signal_received = True
+                
+                if target_done > 0:
+                    done_count = conn.execute("SELECT COUNT(*) FROM tagging_job WHERE run_id = ? AND status = 'done'", (target_run_id,)).fetchone()[0]
+                    if done_count >= target_done:
+                        print(f"Target done count ({target_done}) reached. Exiting.")
+                        break
+                        
+            if max_claims > 0 and jobs_claimed_this_session >= max_claims:
+                print(f"Max claims limit ({max_claims}) reached. Exiting worker loop.")
                 break
 
+            # Claim job
+            job = store.claim_next_job(target_run_id, worker_id)
+            if not job:
+                # Sleep and poll again
+                import time
+                time.sleep(2)
+                continue
+                
+            jobs_claimed_this_session += 1
             print(f"Processing job {job['job_id']}...")
 
             with sqlite3.connect(store.db_path) as conn:

@@ -198,6 +198,8 @@ def get_active_run_id():
 def cmd_worker(args):
     from scripts.semantic_tagger.worker_loop import run_worker_loop
 
+    run_worker_loop(args.model, args.run_id, args.max_claims, args.target_done)
+
     run_worker_loop(args.model, args.run_id, args.max_jobs)
 
 
@@ -289,7 +291,7 @@ def cmd_status(args):
             done = status_counts.get("done", 0)
             running = status_counts.get("running", 0)
             pending = status_counts.get("pending", 0)
-            error = status_counts.get("error", 0)
+            error = status_counts.get("failed", 0)
             skipped = status_counts.get("skipped", 0)
             total_units = done + running + pending + error + skipped
 
@@ -300,7 +302,7 @@ def cmd_status(args):
                 SELECT u.context_id, 
                        COUNT(j.job_id) as total_jobs,
                        SUM(CASE WHEN j.status = 'done' THEN 1 ELSE 0 END) as done_jobs,
-                       SUM(CASE WHEN j.status = 'error' THEN 1 ELSE 0 END) as err_jobs,
+                       SUM(CASE WHEN j.status = 'failed' THEN 1 ELSE 0 END) as err_jobs,
                        SUM(CASE WHEN j.status = 'running' THEN 1 ELSE 0 END) as running_jobs
                 FROM tagging_unit u
                 LEFT JOIN tagging_job j ON u.unit_id = j.unit_id AND j.run_id = ?
@@ -345,7 +347,7 @@ def cmd_status(args):
             job_success_rate = (done / (done + error) * 100) if (done + error) > 0 else 0
 
             error_details = conn.execute(
-                "SELECT error_code, COUNT(*) as c FROM tagging_job WHERE run_id = ? AND status='error' GROUP BY error_code",
+                "SELECT error_code, COUNT(*) as c FROM tagging_job WHERE run_id = ? AND status='failed' GROUP BY error_code",
                 (run_id,),
             ).fetchall()
             valid_json_errors = sum(
@@ -468,6 +470,27 @@ def cmd_status(args):
         _print_status()
 
 
+def cmd_retry_job(args):
+    from scripts.semantic_tagger.job_store import JobStore
+    import sqlite3
+    store = JobStore()
+    with sqlite3.connect(store.db_path, isolation_level="IMMEDIATE") as conn:
+        conn.row_factory = sqlite3.Row
+        now = store._now()
+        row = conn.execute("SELECT * FROM tagging_job WHERE job_id = ?", (args.job_id,)).fetchone()
+        if not row:
+            print(f"Error: Job {args.job_id} not found.")
+            import sys; sys.exit(1)
+        if args.run_id and row["run_id"] != args.run_id:
+            print(f"Error: Job belongs to run {row['run_id']} not {args.run_id}")
+            import sys; sys.exit(1)
+        if row["status"] in ("done", "running"):
+            print(f"Error: Cannot retry job in status {row['status']}")
+            import sys; sys.exit(1)
+        
+        conn.execute("UPDATE tagging_job SET status = 'pending', retry_requested_at = ?, retry_reason = ? WHERE job_id = ?", (now, args.reason, args.job_id))
+        print(f"Job {args.job_id} set to pending for retry.")
+
 def cmd_consolidate(args):
     print("Consolidation would happen here, writing to conversation_consolidation table.")
 
@@ -503,7 +526,7 @@ def main():
         default=0,
         help="Maximum number of jobs to process before exiting (Canary Run)",
     )
-    parser_worker.add_argument("--run-id", type=str, help="Run ID to bind to")
+    parser_worker.add_argument("--run-id", type=str, required=True, help="Run ID to bind to")
 
     subparsers.add_parser("pause")
     subparsers.add_parser("resume")
@@ -515,8 +538,10 @@ def main():
     )
     parser_status.add_argument("--json", action="store_true")
 
-    parser_retry = subparsers.add_parser("retry-errors")
-    parser_retry.add_argument("--max-attempts", type=int, default=3)
+    parser_retry_job = subparsers.add_parser("retry-job")
+    parser_retry_job.add_argument("--job-id", required=True)
+    parser_retry_job.add_argument("--reason", required=True)
+    parser_retry_job.add_argument("--run-id")
 
     subparsers.add_parser("consolidate")
 
