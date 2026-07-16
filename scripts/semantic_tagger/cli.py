@@ -1,5 +1,7 @@
 import argparse
 import sqlite3
+import time
+import json
 from pathlib import Path
 
 from scripts.semantic_tagger.job_store import JobStore
@@ -97,19 +99,30 @@ def cmd_prepare(args):
     store = JobStore()
     run_info = {
         "model_name": "qwen3:14b",
+        "model_digest": "bdbd181c33f2ed1b31c972991882db3cf4d192569092138a7d29e973cd9debe8",
+        "ollama_version": "0.30.10",
         "prompt_version": "semantic_tagger_v1.md",
         "schema_version": "semantic-tags-v1",
-        "unit_strategy_version": "unit-v1",
+        "unit_strategy_version": "unit-v2-whole-events",
+        "settings_json": json.dumps({
+            "think": False,
+            "temperature": 0,
+            "stream": False,
+            "timeout": 600,
+            "endpoint": "http://127.0.0.1:11434"
+        })
     }
     run_id = store.create_run(run_info)
 
     # Read from main DB read-only
     with get_main_db() as conn:
         conn.row_factory = sqlite3.Row
-        contexts = conn.execute(
-            "SELECT DISTINCT context_id FROM events WHERE context_id IS NOT NULL LIMIT ?",
-            (args.limit_contexts,),
-        ).fetchall()
+        query = "SELECT DISTINCT context_id FROM events WHERE context_id IS NOT NULL"
+        if args.sample == "smoke":
+            query += " ORDER BY context_id ASC"
+        query += " LIMIT ?"
+
+        contexts = conn.execute(query, (args.limit_contexts,)).fetchall()
 
         builder = UnitBuilder()
         total_units = 0
@@ -125,14 +138,13 @@ def cmd_prepare(args):
             ).fetchall()
             events = [dict(r) for r in events_rows]
 
-            title = events[0]["title"] if events and events[0]["title"] else ""
+            title = next((e["title"] for e in events if e.get("title")), "")
             units = builder.build_units_for_context(ctx_id, events, title)
 
             for u in units:
                 store.save_unit(u)
 
                 import hashlib
-                import json
 
                 # Generation config hash
                 gen_config = {
@@ -145,7 +157,7 @@ def cmd_prepare(args):
                 generation_config_hash = hashlib.sha256(gen_config_str.encode()).hexdigest()
 
                 # Deterministic job key
-                job_key_raw = f"{u['unit_id']}|{u['content_hash']}|qwen3:14b|bdbd181c33f2ed1b31c972991882db3cf4d192569092138a7d29e973cd9debe8|semantic_tagger_v1.md|semantic-tags-v1|unit-v1|{generation_config_hash}"
+                job_key_raw = f"{u['unit_id']}|{u['content_hash']}|qwen3:14b|bdbd181c33f2ed1b31c972991882db3cf4d192569092138a7d29e973cd9debe8|semantic_tagger_v1.md|semantic-tags-v1|unit-v2-whole-events|{generation_config_hash}"
                 job_key = hashlib.sha256(job_key_raw.encode()).hexdigest()
 
                 store.queue_job(job_key, run_id, u["unit_id"], u["content_hash"])
@@ -251,7 +263,6 @@ def calc_eta(completed_times, pending_count):
 
 
 def cmd_status(args):
-    import json
     import time
     import sqlite3
 
@@ -264,11 +275,16 @@ def cmd_status(args):
         with sqlite3.connect(store.db_path) as conn:
             conn.row_factory = sqlite3.Row
             # Context stats via tagging_unit
-            total_contexts = conn.execute("SELECT COUNT(DISTINCT context_id) FROM tagging_unit").fetchone()[0]
+            total_contexts = conn.execute(
+                "SELECT COUNT(DISTINCT context_id) FROM tagging_unit"
+            ).fetchone()[0]
 
             # Unit stats
-            unit_stats = conn.execute("SELECT status, COUNT(*) as c FROM tagging_job WHERE run_id = ? GROUP BY status", (run_id,)).fetchall()
-            status_counts = {r['status']: r['c'] for r in unit_stats}
+            unit_stats = conn.execute(
+                "SELECT status, COUNT(*) as c FROM tagging_job WHERE run_id = ? GROUP BY status",
+                (run_id,),
+            ).fetchall()
+            status_counts = {r["status"]: r["c"] for r in unit_stats}
 
             done = status_counts.get("done", 0)
             running = status_counts.get("running", 0)
@@ -298,10 +314,10 @@ def cmd_status(args):
             pending_ctx = 0
 
             for ctx in ctx_stats:
-                total_j = ctx['total_jobs'] or 0
-                done_j = ctx['done_jobs'] or 0
-                err_j = ctx['err_jobs'] or 0
-                run_j = ctx['running_jobs'] or 0
+                total_j = ctx["total_jobs"] or 0
+                done_j = ctx["done_jobs"] or 0
+                err_j = ctx["err_jobs"] or 0
+                run_j = ctx["running_jobs"] or 0
 
                 if total_j == 0 or (total_j == (err_j + done_j) and done_j == 0 and err_j == 0):
                     pending_ctx += 1
@@ -317,44 +333,66 @@ def cmd_status(args):
             ctx_percent = (complete_ctx / total_contexts * 100) if total_contexts > 0 else 0
 
             # Retries
-            retry_count = conn.execute("SELECT SUM(attempt_count - 1) FROM tagging_job WHERE run_id = ? AND attempt_count > 1", (run_id,)).fetchone()[0] or 0
+            retry_count = (
+                conn.execute(
+                    "SELECT SUM(attempt_count - 1) FROM tagging_job WHERE run_id = ? AND attempt_count > 1",
+                    (run_id,),
+                ).fetchone()[0]
+                or 0
+            )
 
             # Quality
             job_success_rate = (done / (done + error) * 100) if (done + error) > 0 else 0
 
-            error_details = conn.execute("SELECT error_code, COUNT(*) as c FROM tagging_job WHERE run_id = ? AND status='error' GROUP BY error_code", (run_id,)).fetchall()
-            valid_json_errors = sum(r['c'] for r in error_details if r['error_code'] == 'invalid_json')
-            pydantic_errors = sum(r['c'] for r in error_details if r['error_code'] == 'validation_error')
+            error_details = conn.execute(
+                "SELECT error_code, COUNT(*) as c FROM tagging_job WHERE run_id = ? AND status='error' GROUP BY error_code",
+                (run_id,),
+            ).fetchall()
+            valid_json_errors = sum(
+                r["c"] for r in error_details if r["error_code"] == "invalid_json"
+            )
+            pydantic_errors = sum(
+                r["c"] for r in error_details if r["error_code"] == "validation_error"
+            )
 
             completed_requests = done + valid_json_errors + pydantic_errors
             if completed_requests > 0:
-                valid_json_rate = f"{((completed_requests - valid_json_errors) / completed_requests * 100):.1f}%"
+                valid_json_rate = (
+                    f"{((completed_requests - valid_json_errors) / completed_requests * 100):.1f}%"
+                )
                 pydantic_rate = f"{(done / completed_requests * 100):.1f}%"
             else:
                 valid_json_rate = "N/A"
                 pydantic_rate = "N/A"
 
             # Performance
-            completed_jobs = conn.execute("SELECT elapsed_ms FROM tagging_job WHERE run_id = ? AND status='done' AND elapsed_ms IS NOT NULL", (run_id,)).fetchall()
-            completed_times = [j['elapsed_ms'] / 1000.0 for j in completed_jobs]
+            completed_jobs = conn.execute(
+                "SELECT elapsed_ms FROM tagging_job WHERE run_id = ? AND status='done' AND elapsed_ms IS NOT NULL",
+                (run_id,),
+            ).fetchall()
+            completed_times = [j["elapsed_ms"] / 1000.0 for j in completed_jobs]
 
             p25, median, p90, conf = calc_eta(completed_times, pending)
             units_per_hour = (3600 / median) if median else 0
 
             # Heartbeat and Worker State
-            w_state = conn.execute("SELECT * FROM worker_state WHERE run_id = ? ORDER BY heartbeat_at DESC LIMIT 1", (run_id,)).fetchone()
+            w_state = conn.execute(
+                "SELECT * FROM worker_state WHERE run_id = ? ORDER BY heartbeat_at DESC LIMIT 1",
+                (run_id,),
+            ).fetchone()
             w_status = "OFFLINE"
             hb_age = 9999
 
             if w_state:
                 import datetime
-                hb_time = datetime.datetime.fromisoformat(w_state['heartbeat_at'])
+
+                hb_time = datetime.datetime.fromisoformat(w_state["heartbeat_at"])
                 hb_age = (datetime.datetime.utcnow() - hb_time).total_seconds()
                 if hb_age <= 30:
                     w_status = "RUNNING"
-                    if w_state['pause_requested']:
+                    if w_state["pause_requested"]:
                         w_status = "PAUSED"
-                    elif w_state['stop_after_current_requested']:
+                    elif w_state["stop_after_current_requested"]:
                         w_status = "STOPPING"
                 elif hb_age <= 120:
                     w_status = "STALE"
@@ -369,7 +407,7 @@ def cmd_status(args):
                         "partial": partial_ctx,
                         "pending": pending_ctx,
                         "failed": failed_ctx,
-                        "percent": round(ctx_percent, 1)
+                        "percent": round(ctx_percent, 1),
                     },
                     "units": {
                         "total": total_units,
@@ -377,20 +415,20 @@ def cmd_status(args):
                         "running": running,
                         "pending": pending,
                         "error": error,
-                        "percent": round(units_percent, 1)
+                        "percent": round(units_percent, 1),
                     },
                     "quality": {
                         "job_success_rate": round(job_success_rate, 1),
                         "valid_json_rate": valid_json_rate,
-                        "retry_count": retry_count
+                        "retry_count": retry_count,
                     },
                     "performance": {
                         "median_seconds_per_unit": round(median, 1) if median else None,
                         "units_per_hour": round(units_per_hour, 1),
                         "eta_seconds": median * pending if median else None,
-                        "eta_confidence": conf
+                        "eta_confidence": conf,
                     },
-                    "heartbeat_age_seconds": int(hb_age)
+                    "heartbeat_age_seconds": int(hb_age),
                 }
                 print(json.dumps(data, indent=2))
                 return
@@ -399,9 +437,13 @@ def cmd_status(args):
             print(f"Run: {run_id[:8]}...   Status: {w_status}")
             print(f"Heartbeat: {int(hb_age)} s ago")
             print("\nContexts:")
-            print(f"[{'#'*int(ctx_percent/5)}{'.'*(20-int(ctx_percent/5))}] {complete_ctx} / {total_contexts} completed   {ctx_percent:.1f}%")
+            print(
+                f"[{'#' * int(ctx_percent / 5)}{'.' * (20 - int(ctx_percent / 5))}] {complete_ctx} / {total_contexts} completed   {ctx_percent:.1f}%"
+            )
             print("\nUnits:")
-            print(f"[{'#'*int(units_percent/5)}{'.'*(20-int(units_percent/5))}] {done} / {total_units} done      {units_percent:.1f}%")
+            print(
+                f"[{'#' * int(units_percent / 5)}{'.' * (20 - int(units_percent / 5))}] {done} / {total_units} done      {units_percent:.1f}%"
+            )
 
             print("\nQuality:")
             print(f"  successful jobs:     {job_success_rate:.1f}%")
@@ -455,7 +497,12 @@ def main():
 
     parser_worker = subparsers.add_parser("worker")
     parser_worker.add_argument("--model", type=str, default="qwen3:14b")
-    parser_worker.add_argument("--max-jobs", type=int, default=0, help="Maximum number of jobs to process before exiting (Canary Run)")
+    parser_worker.add_argument(
+        "--max-jobs",
+        type=int,
+        default=0,
+        help="Maximum number of jobs to process before exiting (Canary Run)",
+    )
     parser_worker.add_argument("--run-id", type=str, help="Run ID to bind to")
 
     subparsers.add_parser("pause")
@@ -463,7 +510,9 @@ def main():
     subparsers.add_parser("stop-after-current")
 
     parser_status = subparsers.add_parser("status")
-    parser_status.add_argument("--watch", type=int, help="Refresh interval in seconds", nargs="?", const=5, default=0)
+    parser_status.add_argument(
+        "--watch", type=int, help="Refresh interval in seconds", nargs="?", const=5, default=0
+    )
     parser_status.add_argument("--json", action="store_true")
 
     parser_retry = subparsers.add_parser("retry-errors")

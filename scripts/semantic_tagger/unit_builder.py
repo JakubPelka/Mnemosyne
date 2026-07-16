@@ -9,7 +9,7 @@ class UnitBuilder:
         max_chars=18000,
         max_events=10,
         overlap_events=1,
-        strategy_version="unit-v1",
+        strategy_version="unit-v2-whole-events",
         schema_version="semantic-tags-v1",
     ):
         self.max_chars = max_chars
@@ -22,13 +22,14 @@ class UnitBuilder:
         self, context_id: str, events: List[Dict[str, Any]], title: str = ""
     ) -> List[Dict[str, Any]]:
         # Sort using deterministic keys: timestamp, then event_id
-        events = sorted(events, key=lambda x: (x.get("timestamp_start") or "", x.get("event_id") or ""))
+        events = sorted(
+            events, key=lambda x: (x.get("timestamp_start") or "", x.get("event_id") or "")
+        )
 
         units = []
         current_unit = []
-        current_chars = 0
         sequence_no = 1
-        
+
         # Helper to map event_type reliably to role
         def map_role(e_type):
             if e_type in ("assistant", "user", "system", "tool"):
@@ -49,18 +50,17 @@ class UnitBuilder:
             segments = []
             segments_text = []
             chars = 0
-            
+            has_oversized = False
+
             for i, e in enumerate(unit_events):
-                txt = (e.get("text") or "")
+                txt = e.get("text") or ""
                 txt_len = len(txt)
                 is_over = e["event_id"] in overlap_events_list
-                
-                # Split huge events if they exceed max_chars
-                # To maintain simplicity of this demo, if a single event is larger than max_chars,
-                # we just cap its end_char and maybe emit a warning, but Mnemosyne says:
-                # "test that largest unit doesn't exceed limit EXCEPT for explicitly marked single undivided events."
-                # We will keep it undivided.
-                
+
+                # Report oversized single events per requirements (Variant B)
+                if txt_len > self.max_chars:
+                    has_oversized = True
+
                 seg = {
                     "event_id": e["event_id"],
                     "context_id": context_id,
@@ -68,26 +68,30 @@ class UnitBuilder:
                     "start_char": 0,
                     "end_char": txt_len,
                     "sequence_in_unit": i,
-                    "is_overlap": is_over
+                    "is_overlap": is_over,
                 }
                 segments.append(seg)
                 segments_text.append(txt)
                 chars += txt_len
-                
+
             manifest = {
                 "title_included": bool(title),
                 "title_source": context_id,
                 "unit_strategy_version": self.strategy_version,
-                "segments": segments
+                "segments": segments,
+                "oversized_single_event": has_oversized,
             }
-            
-            canonical_content = serialize_semantic_unit(manifest, segments_text)
+
+            # CRITICAL FIX 1: pass title explicitly to serialize_semantic_unit so hashes match reconstruct
+            canonical_content = serialize_semantic_unit(manifest, segments_text, title_text=title)
             content_hash = compute_content_hash(
                 self.schema_version, self.strategy_version, canonical_content
             )
-            
+
             # Make unit_id include content_hash so INSERT OR IGNORE doesn't skip if hash changes
-            unit_id_raw = f"{context_id}|{seq_no}|{self.strategy_version}|{ordered_ids_str}|{content_hash}"
+            unit_id_raw = (
+                f"{context_id}|{seq_no}|{self.strategy_version}|{ordered_ids_str}|{content_hash}"
+            )
             unit_id = f"unit-{safe_hash(unit_id_raw)}"
 
             return {
@@ -107,10 +111,12 @@ class UnitBuilder:
 
         idx = 0
         overlap_events_list = set()
-        
+
         while idx < len(events):
             e = events[idx]
             txt_len = len((e.get("text") or ""))
+
+            current_chars = sum(len((x.get("text") or "")) for x in current_unit)
 
             if len(current_unit) >= self.max_events or (
                 current_chars + txt_len > self.max_chars and len(current_unit) > 0
@@ -120,21 +126,18 @@ class UnitBuilder:
                     units.append(u)
                 sequence_no += 1
 
-                # Backtrack
-                idx -= self.overlap_events
-                idx = max(0, idx)
-                if self.overlap_events >= len(current_unit):
-                    idx = idx + 1
-                    
-                # Mark overlapping events for next unit
-                overlap_events_list = set(ev["event_id"] for ev in events[idx:idx+self.overlap_events])
+                # CRITICAL FIX 3: overlap carry logic to avoid fake overlaps
+                carry_len = min(self.overlap_events, len(current_unit))
+                if carry_len > 0:
+                    carry = current_unit[-carry_len:]
+                else:
+                    carry = []
 
-                current_unit = []
-                current_chars = 0
+                overlap_events_list = set(ev["event_id"] for ev in carry)
+                current_unit = list(carry)
                 continue
 
             current_unit.append(e)
-            current_chars += txt_len
             idx += 1
 
         if current_unit:
@@ -143,4 +146,3 @@ class UnitBuilder:
                 units.append(u)
 
         return units
-

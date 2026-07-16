@@ -42,29 +42,43 @@ class HeartbeatThread(threading.Thread):
         self.running = False
 
 
-def run_worker_loop(model_name: str, target_run_id: str = None, max_jobs: int = 0, schema_version="semantic-tags-v1", strategy_version="unit-v1"):
-    store = JobStore()
+def run_worker_loop(
+    model_name: str,
+    target_run_id: str = None,
+    max_jobs: int = 0,
+    schema_version="semantic-tags-v1",
+    strategy_version="unit-v1",
+    store: JobStore = None,
+):
+    if not store:
+        store = JobStore()
 
     with sqlite3.connect(store.db_path) as conn:
         conn.row_factory = sqlite3.Row
         if target_run_id:
-            run_row = conn.execute("SELECT * FROM tagging_run WHERE run_id = ?", (target_run_id,)).fetchone()
+            run_row = conn.execute(
+                "SELECT * FROM tagging_run WHERE run_id = ?", (target_run_id,)
+            ).fetchone()
             if not run_row:
                 print(f"Run {target_run_id} not found.")
                 return
         else:
-            run_row = conn.execute("SELECT * FROM tagging_run ORDER BY created_at DESC LIMIT 1").fetchone()
+            run_row = conn.execute(
+                "SELECT * FROM tagging_run ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
             if not run_row:
                 print("No active tagging run found.")
                 return
 
         run_id = run_row["run_id"]
-        
+
         # Verify model config matches the run config
         if run_row["model_name"] != model_name:
-            print(f"Model mismatch. Run requires {run_row['model_name']}, but worker provided {model_name}")
+            print(
+                f"Model mismatch. Run requires {run_row['model_name']}, but worker provided {model_name}"
+            )
             return
-            
+
         # Check for other active workers atomically using a transaction
         conn.execute("BEGIN EXCLUSIVE")
         try:
@@ -80,11 +94,14 @@ def run_worker_loop(model_name: str, target_run_id: str = None, max_jobs: int = 
 
             worker_id = "w1"
             import socket
+
             hostname = socket.gethostname()
             import os
+
             pid = os.getpid()
 
             import datetime
+
             now = datetime.datetime.utcnow().isoformat()
 
             conn.execute(
@@ -110,7 +127,7 @@ def run_worker_loop(model_name: str, target_run_id: str = None, max_jobs: int = 
             if max_jobs > 0 and jobs_processed >= max_jobs:
                 print(f"Max jobs limit ({max_jobs}) reached. Exiting worker loop.")
                 break
-                
+
             # Check worker state
             with sqlite3.connect(store.db_path) as conn:
                 conn.row_factory = sqlite3.Row
@@ -136,6 +153,7 @@ def run_worker_loop(model_name: str, target_run_id: str = None, max_jobs: int = 
 
             with sqlite3.connect(store.db_path) as conn:
                 import datetime
+
                 now = datetime.datetime.utcnow().isoformat()
                 conn.execute(
                     "UPDATE worker_state SET last_job_started_at = ? WHERE run_id = ? AND worker_id = ?",
@@ -165,6 +183,7 @@ def run_worker_loop(model_name: str, target_run_id: str = None, max_jobs: int = 
 
             with sqlite3.connect(store.db_path) as conn:
                 import datetime
+
                 now = datetime.datetime.utcnow().isoformat()
                 conn.execute(
                     "UPDATE worker_state SET last_job_completed_at = ? WHERE run_id = ? AND worker_id = ?",
