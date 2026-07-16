@@ -789,10 +789,22 @@ def main():
     parser_worker = subparsers.add_parser("worker")
     parser_worker.add_argument("--model", type=str, default="qwen3:14b")
     parser_worker.add_argument(
-        "--max-jobs",
+        "--max-claims",
         type=int,
         default=0,
-        help="Maximum number of jobs to process before exiting (Canary Run)",
+        help="Maximum number of successfully claimed jobs in this worker session",
+    )
+    parser_worker.add_argument(
+        "--max-jobs",
+        dest="max_claims",
+        type=int,
+        help=argparse.SUPPRESS,
+    )
+    parser_worker.add_argument(
+        "--target-done",
+        type=int,
+        default=0,
+        help="Exit when this run reaches the requested total number of done jobs",
     )
     parser_worker.add_argument("--run-id", type=str, required=True, help="Run ID to bind to")
     parser_worker.add_argument("--db-path", type=str, help="Custom db path")

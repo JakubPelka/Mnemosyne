@@ -232,3 +232,37 @@ def test_worker_cli_requires_explicit_run_id(tmp_path):
     ]
     res = subprocess.run(cmd, capture_output=True, text=True)
     assert "error: the following arguments are required: --run-id" in res.stderr
+
+
+def test_worker_cli_exposes_claim_and_completion_limits(tmp_path):
+    cmd = [
+        sys.executable,
+        "-m",
+        "scripts.semantic_tagger.cli",
+        "worker",
+        "--help",
+    ]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    assert "--db-path" in res.stdout
+    assert "--run-id" in res.stdout
+    assert "--max-claims" in res.stdout
+    assert "--target-done" in res.stdout
+
+    # Test parser accepting 10 and 10
+    cmd_parse = [
+        sys.executable,
+        "-m",
+        "scripts.semantic_tagger.cli",
+        "worker",
+        "--run-id",
+        "test_id",
+        "--max-claims",
+        "10",
+        "--target-done",
+        "10",
+    ]
+    # We expect it to fail connecting to the db or something further down, but argparse should succeed
+    # Actually wait, let's just use the fact that argparse would return 2 on failure
+    # If it gets past argparse, it will fail due to db or something. We can check if it returns 2.
+    res_parse = subprocess.run(cmd_parse, capture_output=True, text=True)
+    assert res_parse.returncode != 2  # 2 is argparse exit code for invalid args
