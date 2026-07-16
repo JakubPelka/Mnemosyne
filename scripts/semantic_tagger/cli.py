@@ -95,6 +95,110 @@ def cmd_reset_sidecar(args):
     print(f"Sidecar schema reset to version {store.EXPECTED_SCHEMA_VERSION}")
 
 
+def cmd_prepare_rerun(args):
+    import json
+    import sqlite3
+    import hashlib
+    from pathlib import Path
+    from scripts.semantic_tagger.job_store import JobStore
+    from scripts.semantic_tagger.unit_builder import UnitBuilder
+    from scripts.semantic_tagger.content_loader import load_and_reconstruct_unit
+
+    source_sidecar = Path(args.source_sidecar)
+    manifest = Path(args.manifest)
+    target_sidecar = Path(args.target_sidecar)
+
+    if target_sidecar.exists():
+        print(f"Target sidecar {target_sidecar} already exists. Refusing to overwrite.")
+        return
+
+    # Check sha
+    sha256 = hashlib.sha256(source_sidecar.read_bytes()).hexdigest()
+    if sha256 != "5c69f8e3b50071b2e7145f6e984d3b29864aba7cc4d6947bb27f7b41e7f7eb70":
+        print(f"Source sidecar hash mismatch: {sha256}")
+        return
+
+    with open(manifest) as f:
+        manifest_entries = json.load(f)
+
+    if len(manifest_entries) != 10:
+        print(f"Manifest must contain exactly 10 units, found {len(manifest_entries)}")
+        return
+
+    contexts = set(e["context_id"] for e in manifest_entries)
+    if len(contexts) != 9:
+        print(f"Manifest must contain exactly 9 contexts, found {len(contexts)}")
+        return
+
+    store = JobStore(target_sidecar)
+
+    settings = {
+        "think": args.think,
+        "stream": args.stream,
+        "temperature": args.temperature,
+        "seed": args.seed,
+        "num_predict": args.num_predict,
+        "request_timeout_seconds": args.request_timeout_seconds,
+    }
+
+    run_info = {
+        "model_name": args.model,
+        "prompt_version": args.prompt_version,
+        "schema_version": args.schema_version,
+        "unit_strategy_version": args.unit_strategy_version,
+        "settings": settings,
+    }
+
+    run_id = store.create_run(run_info)
+
+    with get_main_db() as conn:
+        conn.row_factory = sqlite3.Row
+        builder = UnitBuilder(
+            schema_version=args.schema_version, strategy_version=args.unit_strategy_version
+        )
+
+        for entry in manifest_entries:
+            old_unit_id = entry["unit_id"]
+            reconstructed_old = load_and_reconstruct_unit(
+                old_unit_id, str(source_sidecar), "semantic-tags-v1", "unit-v2-whole-events"
+            )
+
+            if reconstructed_old.content_hash != entry["content_hash"]:
+                print(
+                    f"Old content hash verification failed for {old_unit_id}. Expected {entry['content_hash']}, got {reconstructed_old.content_hash}"
+                )
+                return
+
+            ctx_id = entry["context_id"]
+            events_rows = conn.execute(
+                "SELECT event_id, title, text, timestamp_start, event_type FROM events WHERE context_id = ? ORDER BY timestamp_start ASC",
+                (ctx_id,),
+            ).fetchall()
+            events = [dict(r) for r in events_rows]
+            title = next((e["title"] for e in events if e.get("title")), "")
+            units = builder.build_units_for_context(ctx_id, events, title)
+
+            matching = [u for u in units if u["event_ids"] == list(reconstructed_old.event_ids)]
+            if not matching:
+                print(f"Could not find matching event set for {old_unit_id}")
+                return
+            new_u = matching[0]
+
+            store.save_unit(new_u)
+
+            gen_config_str = json.dumps(settings, sort_keys=True)
+            generation_config_hash = hashlib.sha256(gen_config_str.encode()).hexdigest()
+
+            job_key_raw = f"{new_u['unit_id']}|{new_u['content_hash']}|{args.model}|<digest>|{args.prompt_version}|{args.schema_version}|{args.unit_strategy_version}|{generation_config_hash}"
+            job_key = hashlib.sha256(job_key_raw.encode()).hexdigest()
+            store.queue_job(job_key, run_id, new_u["unit_id"], new_u["content_hash"])
+
+    print("units = 10")
+    print("jobs_pending = 10")
+    print("attempts = 0")
+    print(f"run_id = {run_id}")
+
+
 def cmd_prepare(args):
     print(f"Preparing sample: {args.sample}, limit: {args.limit_contexts}")
     store = JobStore()
@@ -200,8 +304,11 @@ def get_active_run_id():
 
 def cmd_worker(args):
     from scripts.semantic_tagger.worker_loop import run_worker_loop
+    from scripts.semantic_tagger.job_store import JobStore
+    from pathlib import Path
 
-    run_worker_loop(args.model, args.run_id, args.max_claims, args.target_done)
+    store = JobStore(Path(args.db_path)) if getattr(args, "db_path", None) else None
+    run_worker_loop(args.model, args.run_id, args.max_claims, args.target_done, store=store)
 
 
 def cmd_pause(args):
@@ -652,6 +759,25 @@ def main():
     parser_reset = subparsers.add_parser("reset-sidecar")
     parser_reset.add_argument("--confirm-reset", action="store_true")
 
+    parser_prepare_rerun = subparsers.add_parser("prepare-rerun")
+    parser_prepare_rerun.add_argument("--source-sidecar", required=True)
+    parser_prepare_rerun.add_argument("--manifest", required=True)
+    parser_prepare_rerun.add_argument("--target-sidecar", required=True)
+    parser_prepare_rerun.add_argument("--model", required=True)
+    parser_prepare_rerun.add_argument("--schema-version", required=True)
+    parser_prepare_rerun.add_argument("--prompt-version", required=True)
+    parser_prepare_rerun.add_argument("--unit-strategy-version", required=True)
+    parser_prepare_rerun.add_argument(
+        "--think", type=lambda x: str(x).lower() == "true", default=False
+    )
+    parser_prepare_rerun.add_argument(
+        "--stream", type=lambda x: str(x).lower() == "true", default=False
+    )
+    parser_prepare_rerun.add_argument("--temperature", type=int, default=0)
+    parser_prepare_rerun.add_argument("--seed", type=int, default=42)
+    parser_prepare_rerun.add_argument("--num-predict", type=int, default=2048)
+    parser_prepare_rerun.add_argument("--request-timeout-seconds", type=int, default=3600)
+
     parser_prep = subparsers.add_parser("prepare")
     parser_prep.add_argument("--sample", required=True)
     parser_prep.add_argument("--limit-contexts", type=int, default=12)
@@ -669,6 +795,7 @@ def main():
         help="Maximum number of jobs to process before exiting (Canary Run)",
     )
     parser_worker.add_argument("--run-id", type=str, required=True, help="Run ID to bind to")
+    parser_worker.add_argument("--db-path", type=str, help="Custom db path")
 
     subparsers.add_parser("pause")
     subparsers.add_parser("resume")
@@ -716,6 +843,8 @@ def main():
         cmd_doctor(args)
     elif args.command == "reset-sidecar":
         cmd_reset_sidecar(args)
+    elif args.command == "prepare-rerun":
+        cmd_prepare_rerun(args)
     elif args.command == "prepare":
         cmd_prepare(args)
     elif args.command == "worker":
