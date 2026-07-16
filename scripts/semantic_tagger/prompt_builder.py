@@ -6,7 +6,7 @@ from scripts.semantic_tagger.schemas import TaggerOutput
 def build_tagger_prompt(
     contains_code: bool, contains_logs: bool, contains_urls: bool, content: str
 ) -> str:
-    prompt_path = Path("prompts/semantic_tagger_v1.md")
+    prompt_path = Path("prompts/semantic_hybrid_v1.md")
     if not prompt_path.exists():
         raise FileNotFoundError(f"Missing prompt file: {prompt_path}")
 

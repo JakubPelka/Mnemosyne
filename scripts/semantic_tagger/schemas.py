@@ -54,6 +54,41 @@ RelationType = Literal[
 ]
 
 
+class ConceptFacet(BaseModel):
+    label: str
+    scheme: str = Field(default="local")
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class ConceptMatch(BaseModel):
+    external_id: str
+    external_uri: str
+    scheme: str
+    confidence: float = Field(ge=0.0, le=1.0)
+
+
+class Concept(BaseModel):
+    concept_id: str
+    surface_label: str
+    preferred_label: str
+    language: str
+    entity_types: List[ConceptFacet] = Field(default_factory=list, max_items=5)
+    domains: List[ConceptFacet] = Field(default_factory=list, max_items=8)
+    context_roles: List[ConceptFacet] = Field(default_factory=list, max_items=5)
+    external_matches: List[ConceptMatch] = Field(default_factory=list, max_items=3)
+    importance: float = Field(ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence_event_ids: List[str]
+
+
+class Relation(BaseModel):
+    subject_concept_id: str
+    predicate: str
+    object_concept_id: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence_event_ids: List[str]
+
+
 class UnitQuality(BaseModel):
     mostly_code: bool = Field(description="Czy jednostka składa się głównie z surowego kodu?")
     mostly_logs: bool = Field(description="Czy jednostka składa się głównie z logów technicznych?")
@@ -62,30 +97,13 @@ class UnitQuality(BaseModel):
     )
 
 
-class ConceptOutput(BaseModel):
-    label: str = Field(description="Krótka fraza rzeczownikowa pojęcia")
-    concept_type: ConceptType
-    importance: Importance
-    confidence: float = Field(ge=0.0, le=1.0)
-    aliases_in_text: List[str] = Field(description="Lista dosłownych wariantów z tekstu")
-    evidence_event_ids: List[str] = Field(description="Tylko ID wydarzeń z promptu")
-
-
-class RelationOutput(BaseModel):
-    source_label: str
-    target_label: str
-    relation_type: RelationType
-    confidence: float = Field(ge=0.0, le=1.0)
-    evidence_event_ids: List[str]
-
-
 class TaggerOutput(BaseModel):
-    schema_version: Literal["semantic-tags-v1"] = "semantic-tags-v1"
+    schema_version: Literal["semantic-tags-v2"] = "semantic-tags-v2"
     languages: List[str] = Field(description="Zidentyfikowane języki (np. pl, en, sv)")
-    content_types: List[ContentType]
+    content_types: List[str]
     unit_quality: UnitQuality
-    concepts: List[ConceptOutput] = Field(max_length=12)
-    relations: List[RelationOutput] = Field(max_length=12)
+    concepts: List[Concept] = Field(max_length=12)
+    relations: List[Relation] = Field(max_length=12)
 
 
 # Consolidated Conversation Schemas
