@@ -1,12 +1,15 @@
+from scripts.semantic_tagger.ollama_client import OllamaClient
+from scripts.semantic_tagger.cli import cmd_status
+from scripts.semantic_tagger.job_store import JobStore
+from scripts.semantic_tagger.worker import Worker
 import pytest
 import sqlite3
 import json
+import unittest.mock as mock
+import argparse
 import time
-from pathlib import Path
-from scripts.semantic_tagger.job_store import JobStore
 from scripts.semantic_tagger.unit_builder import UnitBuilder
-from scripts.semantic_tagger.content_loader import load_and_reconstruct_unit, MAIN_DB_URI
-from scripts.semantic_tagger.worker import Worker
+from scripts.semantic_tagger.content_loader import load_and_reconstruct_unit
 from scripts.semantic_tagger.worker_loop import run_worker_loop
 
 
@@ -122,15 +125,16 @@ def test_content_signals_detect_code_logs_urls(test_db_paths):
 
 
 def test_unit_builder_overlap_carry():
-    builder = UnitBuilder(max_events=1, overlap_events=1)
+    builder = UnitBuilder(max_events=2, overlap_events=1)
     events = [
         {"event_id": "e1", "text": "1", "event_type": "user"},
         {"event_id": "e2", "text": "2", "event_type": "user"},
+        {"event_id": "e3", "text": "3", "event_type": "user"},
     ]
     units = builder.build_units_for_context("ctx1", events)
     assert len(units) == 2
-    assert units[0]["event_ids"] == ["e1"]
-    assert units[1]["event_ids"] == ["e1", "e2"]
+    assert units[0]["event_ids"] == ["e1", "e2"]
+    assert units[1]["event_ids"] == ["e2", "e3"]
 
     # Check is_overlap flag in manifest segments
     assert units[1]["segments"]["segments"][0]["is_overlap"] is True
@@ -143,7 +147,7 @@ def test_audit_retry_numbering(test_db_paths):
     prompts_seen = []
 
     class MockClient:
-        def generate_tags(self, p, s):
+        def generate_tags(self, p, s, n=2048, seed=42):
             prompts_seen.append(p)
             from scripts.semantic_tagger.ollama_client import OllamaError
 
@@ -152,13 +156,13 @@ def test_audit_retry_numbering(test_db_paths):
     store = JobStore(sidecar_db)
     with sqlite3.connect(store.db_path) as conn:
         conn.execute(
-            "INSERT INTO tagging_job (job_id, attempt_count, status) VALUES ('j1', 1, 'running')"
+            "INSERT INTO tagging_job (job_id, attempt_count, status, lease_token) VALUES ('j1', 1, 'running', 'l1')"
         )
         conn.execute(
-            "INSERT INTO tagging_job (job_id, attempt_count, status) VALUES ('j2', 2, 'running')"
+            "INSERT INTO tagging_job (job_id, attempt_count, status, lease_token) VALUES ('j2', 2, 'running', 'l2')"
         )
         conn.execute(
-            "INSERT INTO tagging_job (job_id, attempt_count, status) VALUES ('j3', 3, 'running')"
+            "INSERT INTO tagging_job (job_id, attempt_count, status, lease_token) VALUES ('j3', 3, 'running', 'l3')"
         )
         conn.commit()
 
@@ -170,17 +174,23 @@ def test_audit_retry_numbering(test_db_paths):
         contains_urls = False
         content = "test"
 
-    worker.run_one({"job_id": "j1", "attempt_count": 1}, MockUnit())
+    worker.run_one(
+        {"job_id": "j1", "attempt_count": 1, "attempt_id": "a1", "lease_token": "l1"}, MockUnit()
+    )
     assert "Ostatnia próba" not in prompts_seen[0]
 
-    worker.run_one({"job_id": "j2", "attempt_count": 2}, MockUnit())
+    worker.run_one(
+        {"job_id": "j2", "attempt_count": 2, "attempt_id": "a2", "lease_token": "l2"}, MockUnit()
+    )
     assert "Zwróć tylko 100% poprawne dane" in prompts_seen[1]
 
-    worker.run_one({"job_id": "j3", "attempt_count": 3}, MockUnit())
+    worker.run_one(
+        {"job_id": "j3", "attempt_count": 3, "attempt_id": "a3", "lease_token": "l3"}, MockUnit()
+    )
     assert "Zwróć maksymalnie 6 pojęć" in prompts_seen[2]
 
 
-def test_max_jobs_and_isolation(test_db_paths):
+def test_max_claims_and_isolation(test_db_paths):
     main_db, sidecar_db = test_db_paths
 
     store = JobStore(sidecar_db)
@@ -208,8 +218,8 @@ def test_max_jobs_and_isolation(test_db_paths):
             return_value=mock.MagicMock(),
         ),
     ):
-        # max_jobs = 2
-        run_worker_loop("test_model", target_run_id=run_id, max_jobs=2, store=store)
+        # max_claims = 2
+        run_worker_loop("test_model", target_run_id=run_id, max_claims=2, store=store)
 
         # Check jobs
         with sqlite3.connect(store.db_path) as conn:
@@ -238,14 +248,492 @@ def test_worker_lock(test_db_paths):
         )
 
     # Another worker should abort
-    import sys, io
+    import sys
+    import io
 
     old_stdout = sys.stdout
     sys.stdout = io.StringIO()
     try:
-        run_worker_loop("test_model", target_run_id=run_id, max_jobs=1, store=store)
+        run_worker_loop("test_model", target_run_id=run_id, max_claims=1, store=store)
     finally:
         out = sys.stdout.getvalue()
         sys.stdout = old_stdout
 
     assert "Another live worker already owns this run." in out
+
+
+def test_unit_builder_progress_when_max_events_equals_overlap():
+    builder = UnitBuilder(max_events=1, overlap_events=1)
+    events = [
+        {"event_id": "e1", "text": "A"},
+        {"event_id": "e2", "text": "B"},
+        {"event_id": "e3", "text": "C"},
+    ]
+    units = builder.build_units_for_context("ctx", events)
+
+    assert len(units) == 3
+    assert units[0]["event_ids"] == ["e1"]
+    assert units[1]["event_ids"] == ["e2"]
+    assert units[2]["event_ids"] == ["e3"]
+
+
+def test_unit_builder_rejects_zero_max_events():
+    with pytest.raises(ValueError, match="max_events must be at least 1"):
+        UnitBuilder(max_events=0, overlap_events=1)
+    with pytest.raises(ValueError, match="max_events must be at least 1"):
+        UnitBuilder(max_events=-1)
+    with pytest.raises(ValueError, match="overlap_events must be at least 0"):
+        UnitBuilder(max_events=10, overlap_events=-1)
+
+
+def test_max_claims_counts_claims_not_loop_iterations(tmp_path):
+    # max_claims applies to successfully claimed jobs
+    store = JobStore(tmp_path / "test.sqlite3")
+    store._init_db()
+    run_id = store.create_run(
+        {
+            "model_name": "qwen3:14b",
+            "settings": {},
+            "schema_version": "v1",
+            "unit_strategy_version": "v1",
+        }
+    )
+
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            "INSERT INTO tagging_unit (unit_id, context_id, content_hash, segments_json) VALUES ('u1', 'c1', 'hash', '{}')"
+        )
+        conn.execute(
+            "INSERT INTO tagging_unit (unit_id, context_id, content_hash, segments_json) VALUES ('u2', 'c1', 'hash', '{}')"
+        )
+        conn.execute(
+            "INSERT INTO tagging_job (job_id, job_key, run_id, unit_id, status) VALUES ('j1', 'k1', ?, 'u1', 'pending')",
+            (run_id,),
+        )
+        conn.execute(
+            "INSERT INTO tagging_job (job_id, job_key, run_id, unit_id, status) VALUES ('j2', 'k2', ?, 'u2', 'pending')",
+            (run_id,),
+        )
+
+    with (
+        mock.patch("scripts.semantic_tagger.worker_loop.Worker") as MockWorker,
+        mock.patch("scripts.semantic_tagger.worker_loop.load_and_reconstruct_unit") as _,
+        mock.patch("time.sleep") as mock_sleep,
+    ):
+        worker_instance = mock.MagicMock()
+        worker_instance.run_one.return_value = True
+        MockWorker.return_value = worker_instance
+
+        # We need a custom claim_next_job that returns None once, then claims, to prove loop iterations without claims don't count
+        orig_claim = store.claim_next_job
+        claim_calls = 0
+
+        def fake_claim(*args):
+            nonlocal claim_calls
+            claim_calls += 1
+            if claim_calls == 1:
+                return None
+            return orig_claim(*args)
+
+        with mock.patch.object(store, "claim_next_job", side_effect=fake_claim):
+            run_worker_loop("qwen3:14b", target_run_id=run_id, max_claims=2, store=store)
+
+        assert worker_instance.run_one.call_count == 2
+        assert mock_sleep.call_count >= 1
+
+
+def test_target_done_counts_successes_for_selected_run(tmp_path):
+    store = JobStore(tmp_path / "test.sqlite3")
+    store._init_db()
+    run_id = store.create_run(
+        {
+            "model_name": "qwen3:14b",
+            "settings": {},
+            "schema_version": "v1",
+            "unit_strategy_version": "v1",
+        }
+    )
+
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            "INSERT INTO tagging_unit (unit_id, context_id, content_hash, segments_json) VALUES ('u1', 'c1', 'hash', '{}')"
+        )
+        conn.execute(
+            "INSERT INTO tagging_job (job_id, job_key, run_id, unit_id, status) VALUES ('j1', 'k1', ?, 'u1', 'done')",
+            (run_id,),
+        )
+
+    with (
+        mock.patch("scripts.semantic_tagger.worker_loop.Worker") as MockWorker,
+        mock.patch("scripts.semantic_tagger.worker_loop.load_and_reconstruct_unit"),
+    ):
+        MockWorker.return_value.run_one.return_value = True
+        run_worker_loop("qwen3:14b", target_run_id=run_id, target_done=1, store=store)
+        assert MockWorker.return_value.run_one.call_count == 0
+
+
+def test_failed_job_requires_explicit_retry(tmp_path):
+    store = JobStore(tmp_path / "test.sqlite3")
+    store._init_db()
+    run_id = store.create_run(
+        {
+            "model_name": "qwen3:14b",
+            "settings": {},
+            "schema_version": "v1",
+            "unit_strategy_version": "v1",
+        }
+    )
+
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            "INSERT INTO tagging_unit (unit_id, context_id, content_hash, segments_json) VALUES ('u1', 'c1', 'hash', '{}')"
+        )
+        conn.execute(
+            "INSERT INTO tagging_job (job_id, job_key, run_id, unit_id, status) VALUES ('j1', 'k1', ?, 'u1', 'pending')",
+            (run_id,),
+        )
+
+    with (
+        mock.patch("scripts.semantic_tagger.worker_loop.Worker") as MockWorker,
+        mock.patch("scripts.semantic_tagger.worker_loop.load_and_reconstruct_unit"),
+    ):
+        worker_inst = mock.MagicMock()
+
+        def fake_run_one(job, unit):
+            store.fail_job(job["job_id"], job["attempt_id"], job["lease_token"], "sys", "sys")
+            return False
+
+        worker_inst.run_one.side_effect = fake_run_one
+
+        MockWorker.return_value = worker_inst
+
+        run_worker_loop("qwen3:14b", target_run_id=run_id, max_claims=1, store=store)
+
+    with sqlite3.connect(store.db_path) as conn:
+        row = conn.execute("SELECT status FROM tagging_job WHERE job_id = 'j1'").fetchone()
+        assert row[0] == "failed"
+
+    # Run again, max_claims=1. It should NOT pick up the failed job.
+    with (
+        mock.patch("scripts.semantic_tagger.worker_loop.Worker") as MockWorker2,
+        mock.patch("scripts.semantic_tagger.worker_loop.load_and_reconstruct_unit"),
+        mock.patch("time.sleep", side_effect=InterruptedError),
+    ):
+        # We raise InterruptedError on sleep to break the loop since it would just poll forever
+        try:
+            run_worker_loop("qwen3:14b", target_run_id=run_id, max_claims=1, store=store)
+        except InterruptedError:
+            pass
+        assert MockWorker2.return_value.run_one.call_count == 0
+
+
+def test_no_job_available_does_not_consume_claim(tmp_path):
+    store = JobStore(tmp_path / "test.sqlite3")
+    store._init_db()
+    run_id = store.create_run(
+        {
+            "model_name": "qwen3:14b",
+            "settings": {},
+            "schema_version": "v1",
+            "unit_strategy_version": "v1",
+        }
+    )
+
+    with (
+        mock.patch("scripts.semantic_tagger.worker_loop.Worker") as MockWorker,
+        mock.patch("scripts.semantic_tagger.worker_loop.load_and_reconstruct_unit"),
+        mock.patch("time.sleep") as mock_sleep,
+    ):
+        mock_sleep.side_effect = InterruptedError
+        try:
+            run_worker_loop("qwen3:14b", target_run_id=run_id, max_claims=1, store=store)
+        except InterruptedError:
+            pass
+        assert MockWorker.return_value.run_one.call_count == 0
+
+
+def test_stale_worker_cannot_complete_after_takeover(tmp_path):
+    store = JobStore(tmp_path / "test.sqlite3")
+    store._init_db()
+    run_id = store.create_run(
+        {
+            "model_name": "qwen3:14b",
+            "settings": {},
+            "schema_version": "v1",
+            "unit_strategy_version": "v1",
+        }
+    )
+
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            "INSERT INTO tagging_unit (unit_id, context_id, content_hash, segments_json) VALUES ('u1', 'c1', 'hash', '{}')"
+        )
+        conn.execute(
+            "INSERT INTO tagging_job (job_id, job_key, run_id, unit_id, status) VALUES ('j1', 'k1', ?, 'u1', 'pending')",
+            (run_id,),
+        )
+
+    # Claim job with expired lease
+    job = store.claim_next_job(run_id, "worker1", lease_seconds=-10)
+
+    # Recover the job via periodic cleanup logic inside claim_next_job (which should reclaim expired ones)
+    job2 = store.claim_next_job(run_id, "worker2")
+    assert job2["attempt_id"] != job["attempt_id"]
+
+    # Stale worker tries to complete
+    with pytest.raises(RuntimeError, match="lease expired or invalid token"):
+        store.complete_job("j1", job["attempt_id"], job["lease_token"], "{}", "hash", 100, 10, 10)
+
+
+def test_heartbeat_uses_configured_sidecar(tmp_path):
+    store = JobStore(tmp_path / "test.sqlite3")
+    store._init_db()
+    run_id = store.create_run(
+        {
+            "model_name": "qwen3:14b",
+            "settings": {},
+            "schema_version": "v1",
+            "unit_strategy_version": "v1",
+        }
+    )
+
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            "INSERT INTO worker_state (run_id, worker_id, status) VALUES (?, 'w1', 'running')",
+            (run_id,),
+        )
+
+    from scripts.semantic_tagger.worker_loop import HeartbeatThread
+
+    heartbeat = HeartbeatThread(str(store.db_path), run_id, "w1")
+
+    # Run a single loop using mock
+    with mock.patch("time.sleep", side_effect=InterruptedError):
+        try:
+            heartbeat.run()
+        except InterruptedError:
+            pass
+
+    with sqlite3.connect(store.db_path) as conn:
+        row = conn.execute(
+            "SELECT heartbeat_at FROM worker_state WHERE worker_id = 'w1'"
+        ).fetchone()
+        assert row[0] is not None
+
+
+def test_claimed_job_contains_generation_settings(tmp_path):
+    store = JobStore(tmp_path / "test.sqlite3")
+    store._init_db()
+    settings = {
+        "think": False,
+        "stream": False,
+        "temperature": 0.0,
+        "seed": 42,
+        "num_predict": 2048,
+        "request_timeout_seconds": 3600,
+    }
+    run_id = store.create_run(
+        {
+            "model_name": "qwen3:14b",
+            "settings": settings,
+            "schema_version": "v1",
+            "unit_strategy_version": "v1",
+        }
+    )
+
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            "INSERT INTO tagging_unit (unit_id, context_id, content_hash, segments_json) VALUES ('u1', 'c1', 'hash', '{}')"
+        )
+        conn.execute(
+            "INSERT INTO tagging_job (job_id, job_key, run_id, unit_id, status) VALUES ('j1', 'k1', ?, 'u1', 'pending')",
+            (run_id,),
+        )
+
+    job = store.claim_next_job(run_id, "w1")
+    assert job["num_predict"] == 2048
+    assert job["seed"] == 42
+
+
+def test_worker_passes_generation_settings_to_client(tmp_path):
+    store = JobStore(tmp_path / "test.sqlite3")
+    client = mock.MagicMock()
+    # fake return valid_output, prompt_tokens, completion_tokens, done_reason
+    mock_out = mock.MagicMock()
+    mock_out.model_dump_json.return_value = "{}"
+    client.generate_tags.return_value = (mock_out, 10, 10, "stop")
+    worker = Worker(store, client)
+    store.complete_job = mock.MagicMock()
+
+    job = {
+        "job_id": "j1",
+        "attempt_count": 1,
+        "attempt_id": "a1",
+        "lease_token": "tok",
+        "num_predict": 1024,
+        "seed": 99,
+    }
+    unit = mock.MagicMock()
+    unit.render_prompt.return_value = "prompt"
+
+    worker.run_one(job, unit)
+
+    client.generate_tags.assert_called_once()
+    args, kwargs = client.generate_tags.call_args
+    assert args[2] == 1024  # num_predict
+    assert args[3] == 99  # seed
+
+
+def test_ollama_payload_contains_num_predict_and_seed():
+    client = OllamaClient("qwen3:14b")
+
+    with mock.patch("urllib.request.urlopen") as mock_urlopen:
+        mock_resp = mock.MagicMock()
+        mock_resp.read.return_value = json.dumps({"tags": [], "done_reason": "stop"}).encode(
+            "utf-8"
+        )
+        mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+        try:
+            client.generate_tags("prompt", {}, num_predict=1024, seed=99)
+        except Exception:
+            pass
+
+        req = mock_urlopen.call_args[0][0]
+        payload = json.loads(req.data.decode("utf-8"))
+        assert payload["options"]["num_predict"] == 1024
+        assert payload["options"]["seed"] == 99
+
+
+def test_generation_hash_changes_with_num_predict(tmp_path):
+    store = JobStore(tmp_path / "test.sqlite3")
+    store._init_db()
+
+    s1 = {"num_predict": 1024}
+    r1 = store.create_run(
+        {"model_name": "m", "settings": s1, "schema_version": "v1", "unit_strategy_version": "v1"}
+    )
+
+    s2 = {"num_predict": 2048}
+    r2 = store.create_run(
+        {"model_name": "m", "settings": s2, "schema_version": "v1", "unit_strategy_version": "v1"}
+    )
+
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            "INSERT INTO tagging_unit (unit_id, context_id, content_hash, segments_json) VALUES ('u1', 'c1', 'hash', '{}')"
+        )
+        conn.execute(
+            "INSERT INTO tagging_job (job_id, job_key, run_id, unit_id, status) VALUES ('j1', 'k1', ?, 'u1', 'pending')",
+            (r1,),
+        )
+        conn.execute(
+            "INSERT INTO tagging_job (job_id, job_key, run_id, unit_id, status) VALUES ('j2', 'k2', ?, 'u1', 'pending')",
+            (r2,),
+        )
+
+    job1 = store.claim_next_job(r1, "w1")
+    job2 = store.claim_next_job(r2, "w2")
+
+    with sqlite3.connect(store.db_path) as conn:
+        hash1 = conn.execute(
+            "SELECT generation_config_hash FROM tagging_attempt WHERE attempt_id = ?",
+            (job1["attempt_id"],),
+        ).fetchone()[0]
+        hash2 = conn.execute(
+            "SELECT generation_config_hash FROM tagging_attempt WHERE attempt_id = ?",
+            (job2["attempt_id"],),
+        ).fetchone()[0]
+        assert hash1 != hash2
+
+
+def test_truncated_response_is_failed_as_output_truncated(tmp_path):
+    store = JobStore(tmp_path / "test.sqlite3")
+    store._init_db()
+    run_id = store.create_run(
+        {
+            "model_name": "qwen3:14b",
+            "settings": {},
+            "schema_version": "v1",
+            "unit_strategy_version": "v1",
+        }
+    )
+
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            "INSERT INTO tagging_unit (unit_id, context_id, content_hash, segments_json) VALUES ('u1', 'c1', 'hash', '{}')"
+        )
+        conn.execute(
+            "INSERT INTO tagging_job (job_id, job_key, run_id, unit_id, status) VALUES ('j1', 'k1', ?, 'u1', 'pending')",
+            (run_id,),
+        )
+
+    job = store.claim_next_job(run_id, "w1")
+
+    client = mock.MagicMock()
+    # return done_reason="length"
+    client.generate_tags.return_value = (mock.MagicMock(), 10, 10, "length")
+    worker = Worker(store, client)
+    store.complete_job = mock.MagicMock()
+
+    unit = mock.MagicMock()
+    unit.render_prompt.return_value = "prompt"
+
+    success = worker.run_one(job, unit)
+    assert not success
+
+    with sqlite3.connect(store.db_path) as conn:
+        row = conn.execute(
+            "SELECT status, error_code, done_reason FROM tagging_attempt WHERE attempt_id = ?",
+            (job["attempt_id"],),
+        ).fetchone()
+        assert row[0] == "failed"
+        assert row[1] == "output_truncated"
+        assert row[2] == "length"
+
+
+def test_report_computes_json_rate_with_mixed_outcomes(tmp_path, capsys):
+    from scripts.semantic_tagger.job_store import JobStore
+
+    store = JobStore(tmp_path / "test.sqlite3")
+    store._init_db()
+    run_id = store.create_run(
+        {
+            "model_name": "qwen3:14b",
+            "settings_json": "{}",
+            "schema_version": "v1",
+            "unit_strategy_version": "v1",
+        }
+    )
+
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            "INSERT INTO tagging_unit (unit_id, context_id, content_hash, segments_json) VALUES ('u1', 'c1', 'hash', '{}')"
+        )
+        conn.execute(
+            "INSERT INTO tagging_unit (unit_id, context_id, content_hash, segments_json) VALUES ('u2', 'c2', 'hash', '{}')"
+        )
+        conn.execute(
+            "INSERT INTO tagging_unit (unit_id, context_id, content_hash, segments_json) VALUES ('u3', 'c3', 'hash', '{}')"
+        )
+
+        # 3 jobs. 1 done, 1 failed (json), 1 failed (other)
+        conn.execute(
+            "INSERT INTO tagging_job (job_id, job_key, run_id, unit_id, status) VALUES ('j1', 'k1', ?, 'u1', 'done')",
+            (run_id,),
+        )
+        conn.execute(
+            "INSERT INTO tagging_job (job_id, job_key, run_id, unit_id, status, error_code) VALUES ('j2', 'k2', ?, 'u2', 'failed', 'ollama_error')",
+            (run_id,),
+        )
+        conn.execute(
+            "INSERT INTO tagging_job (job_id, job_key, run_id, unit_id, status, error_code) VALUES ('j3', 'k3', ?, 'u3', 'failed', 'system_error')",
+            (run_id,),
+        )
+
+    args = argparse.Namespace(watch=0, json=False)
+    with mock.patch("scripts.semantic_tagger.cli.get_active_run_id", return_value=(run_id, store)):
+        cmd_status(args)
+
+    captured = capsys.readouterr()
+    assert "valid JSON:" in captured.out
