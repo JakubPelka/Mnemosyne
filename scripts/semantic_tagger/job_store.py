@@ -1,9 +1,23 @@
 import sqlite3
 import json
 import uuid
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List
+
+
+class LeaseLostError(RuntimeError):
+    pass
+
+
+class JobExecutionContext:
+    def __init__(self, job_id: str, attempt_id: str, lease_token: str):
+        self.job_id = job_id
+        self.attempt_id = attempt_id
+        self.lease_token = lease_token
+        self.lease_lost_event = threading.Event()
+
 
 DB_PATH = Path("data/semantic_tagger.local.sqlite3")
 EXPECTED_SCHEMA_VERSION = 3
@@ -83,7 +97,9 @@ CREATE TABLE IF NOT EXISTS tagging_job (
     prompt_tokens INTEGER,
     completion_tokens INTEGER,
     retry_requested_at TEXT,
-    retry_reason TEXT
+    retry_reason TEXT,
+    vocabulary_status TEXT DEFAULT 'pending',
+    vocabulary_error_code TEXT
 );
 
 CREATE TABLE IF NOT EXISTS tagging_attempt (
@@ -132,13 +148,24 @@ CREATE TABLE IF NOT EXISTS conversation_consolidation (
 class JobStore:
     EXPECTED_SCHEMA_VERSION = 3
 
+    def _connect(self, isolation_level=None):
+        import sqlite3
+
+        conn = sqlite3.connect(self.db_path, timeout=5.0, isolation_level=isolation_level)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = FULL")
+        return conn
+
     def __init__(self, db_path: Path = DB_PATH):
         self.db_path = db_path
         db_exists = self.db_path.exists()
 
         if db_exists:
             # Check version
-            with sqlite3.connect(self.db_path) as conn:
+            with self._connect() as conn:
                 try:
                     cursor = conn.execute(
                         "SELECT value FROM sidecar_meta WHERE key='schema_version'"
@@ -156,7 +183,7 @@ class JobStore:
         self._init_db()
 
     def _init_db(self):
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute("PRAGMA journal_mode = WAL")
             conn.execute("PRAGMA synchronous = FULL")
             conn.execute("PRAGMA foreign_keys = ON")
@@ -169,7 +196,7 @@ class JobStore:
     def create_run(self, run_info: Dict[str, Any]) -> str:
         run_id = str(uuid.uuid4())
         now = self._now()
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute(
                 "INSERT INTO tagging_run (run_id, created_at, updated_at, status, source_database_fingerprint, model_name, model_digest, ollama_version, prompt_version, schema_version, unit_strategy_version, consolidation_prompt_version, settings_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
@@ -191,7 +218,7 @@ class JobStore:
         return run_id
 
     def save_unit(self, unit: Dict[str, Any]):
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO tagging_unit (unit_id, context_id, sequence_no, content_hash, event_ids_json, segments_json, event_count, character_count, estimated_token_count, first_event_at, last_event_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
@@ -211,7 +238,7 @@ class JobStore:
             )
 
     def queue_job(self, job_key: str, run_id: str, unit_id: str, input_hash: str):
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO tagging_job (job_id, job_key, run_id, unit_id, status, attempt_count, input_hash) VALUES (?, ?, ?, ?, 'pending', 0, ?)",
                 (str(uuid.uuid4()), job_key, run_id, unit_id, input_hash),
@@ -222,7 +249,7 @@ class JobStore:
     ) -> Dict[str, Any]:
         import hashlib
 
-        with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
+        with self._connect(isolation_level="IMMEDIATE") as conn:
             conn.row_factory = sqlite3.Row
 
             row = conn.execute(
@@ -315,7 +342,7 @@ class JobStore:
             return job_dict
 
     def renew_lease(self, job_id: str, attempt_id: str, lease_token: str, lease_seconds: int = 900):
-        with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
+        with self._connect(isolation_level="IMMEDIATE") as conn:
             import datetime
 
             dt_now = datetime.datetime.utcnow()
@@ -328,18 +355,18 @@ class JobStore:
                 raise RuntimeError("LeaseLostError: Cannot renew lease")
 
     def set_run_status(self, run_id: str, new_status: str):
-        with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
+        with self._connect(isolation_level="IMMEDIATE") as conn:
             conn.execute("UPDATE tagging_run SET status = ? WHERE run_id = ?", (new_status, run_id))
 
     def get_run_status(self, run_id: str) -> str:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             row = conn.execute(
                 "SELECT status FROM tagging_run WHERE run_id = ?", (run_id,)
             ).fetchone()
             return row[0] if row else "unknown"
 
     def recover_expired_leases(self, run_id: str):
-        with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
+        with self._connect(isolation_level="IMMEDIATE") as conn:
             now = self._now()
             # find running jobs with expired lease
             rows = conn.execute(
@@ -359,7 +386,7 @@ class JobStore:
                 )
 
     def get_pending_jobs(self, run_id: str, limit: int = 10) -> List[Dict]:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.row_factory = sqlite3.Row
             # Restore expired leases
 
@@ -375,7 +402,7 @@ class JobStore:
     def lease_job(self, job_id: str, lease_seconds: int = 300) -> bool:
         now = datetime.utcnow()
         expires = datetime.utcfromtimestamp(now.timestamp() + lease_seconds).isoformat()
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "UPDATE tagging_job SET status = 'running', lease_started_at = ?, lease_expires_at = ?, attempt_count = attempt_count + 1 WHERE job_id = ? AND status IN ('pending', 'error')",
                 (now.isoformat(), expires, job_id),
@@ -393,7 +420,7 @@ class JobStore:
         prompt_tokens: int,
         completion_tokens: int,
     ):
-        with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
+        with self._connect(isolation_level="IMMEDIATE") as conn:
             conn.row_factory = sqlite3.Row
             now = self._now()
             row = conn.execute(
@@ -430,7 +457,7 @@ class JobStore:
         completion_tokens: int,
         done_reason: str,
     ):
-        with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
+        with self._connect(isolation_level="IMMEDIATE") as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT * FROM tagging_job WHERE job_id = ? AND status = 'running' AND lease_token = ?",
@@ -447,7 +474,7 @@ class JobStore:
             )
 
     def retry_job(self, job_id: str, reason: str):
-        with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
+        with self._connect(isolation_level="IMMEDIATE") as conn:
             conn.row_factory = sqlite3.Row
             now = self._now()
             row = conn.execute("SELECT * FROM tagging_job WHERE job_id = ?", (job_id,)).fetchone()
@@ -470,7 +497,7 @@ class JobStore:
         error_summary: str,
         done_reason: str = None,
     ):
-        with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
+        with self._connect(isolation_level="IMMEDIATE") as conn:
             conn.row_factory = sqlite3.Row
             now = self._now()
             row = conn.execute(

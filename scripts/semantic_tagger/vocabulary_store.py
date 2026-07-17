@@ -12,12 +12,23 @@ def normalize_label(label: str) -> str:
 
 
 class VocabularyStore:
+    def _connect(self, isolation_level=None):
+        import sqlite3
+
+        conn = sqlite3.connect(self.db_path, timeout=5.0, isolation_level=isolation_level)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = FULL")
+        return conn
+
     def __init__(self, db_path: Path = Path("data/semantic_vocabulary.local.sqlite3")):
         self.db_path = db_path
         self._init_db()
 
     def _init_db(self):
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS vocabulary_candidate (
@@ -83,7 +94,7 @@ class VocabularyStore:
         normalized = normalize_label(original_label)
         now = datetime.datetime.now(datetime.UTC).isoformat()
 
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             # Check if candidate exists
             cursor = conn.execute(
                 "SELECT candidate_id, max_confidence FROM vocabulary_candidate WHERE dimension = ? AND normalized_label = ? AND language = ?",
@@ -152,7 +163,7 @@ class VocabularyStore:
         normalized = normalize_label(original_label)
         now = datetime.datetime.now(datetime.UTC).isoformat()
 
-        with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
+        with self._connect(isolation_level="IMMEDIATE") as conn:
             # Check if candidate exists
             cursor = conn.execute(
                 "SELECT candidate_id, max_confidence FROM vocabulary_candidate WHERE dimension = ? AND normalized_label = ? AND language = ?",

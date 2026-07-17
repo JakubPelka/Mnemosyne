@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from pydantic import BaseModel
-from scripts.semantic_tagger.schemas import TaggerOutput, TaggerOutputV3
+from scripts.semantic_tagger.schemas import TaggerOutput
 from typing import Dict
 
 PROMPT_MAP = {
@@ -16,8 +16,17 @@ class PromptBuildResult(BaseModel):
     evidence_alias_to_event_id: Dict[str, str]
 
 
+class PromptBuildError(ValueError):
+    pass
+
+
 def build_tagger_prompt(
-    prompt_version: str, contains_code: bool, contains_logs: bool, contains_urls: bool, content: str
+    prompt_version: str,
+    contains_code: bool,
+    contains_logs: bool,
+    contains_urls: bool,
+    content: str,
+    event_ids: list[str] = None,
 ) -> PromptBuildResult:
     if prompt_version not in PROMPT_MAP:
         raise ValueError(f"Unknown prompt version: {prompt_version}")
@@ -33,7 +42,9 @@ def build_tagger_prompt(
     evidence_alias_to_event_id = {}
 
     if prompt_version == "semantic-hybrid-v3":
-        schema_json = json.dumps(TaggerOutputV3.model_json_schema(), indent=2)
+        from scripts.semantic_tagger.schemas import TaggerOutputV3ModelOutput
+
+        schema_json = json.dumps(TaggerOutputV3ModelOutput.model_json_schema(), indent=2)
 
         import re
 
@@ -49,7 +60,22 @@ def build_tagger_prompt(
             evidence_alias_to_event_id[alias] = event_id
             return f"[EVENT evidence_id={alias} "
 
-        content = re.sub(r"\[EVENT evidence_id=([a-zA-Z0-9_-]+)\s+", repl, content)
+        content = re.sub(r"\[EVENT event_id=([a-zA-Z0-9_-]+)\s+", repl, content)
+
+        if event_ids:
+            # Validate
+            unique_mapped = set(evidence_alias_to_event_id.values())
+            unique_expected = set(event_ids)
+            if unique_mapped != unique_expected:
+                raise PromptBuildError("Alias mapping failed: missing or extra events.")
+
+            for i in range(1, len(evidence_alias_to_event_id) + 1):
+                if f"E{i}" not in evidence_alias_to_event_id:
+                    raise PromptBuildError(f"Alias sequence broken: missing E{i}")
+
+            for eid in event_ids:
+                if f"event_id={eid}" in content:
+                    raise PromptBuildError(f"Event ID {eid} leaked in prompt.")
 
     else:
         schema_json = json.dumps(TaggerOutput.model_json_schema(), indent=2)

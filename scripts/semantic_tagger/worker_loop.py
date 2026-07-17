@@ -2,7 +2,7 @@ import time
 import threading
 import sqlite3
 
-from scripts.semantic_tagger.job_store import JobStore
+from scripts.semantic_tagger.job_store import JobStore, JobExecutionContext, LeaseLostError
 from scripts.semantic_tagger.ollama_client import OllamaClient
 from scripts.semantic_tagger.worker import Worker
 from scripts.semantic_tagger.content_loader import load_and_reconstruct_unit
@@ -15,22 +15,16 @@ class HeartbeatThread(threading.Thread):
         self.run_id = run_id
         self.worker_id = worker_id
         self.running = True
-        self.active_job_id = None
-        self.active_attempt_id = None
-        self.active_lease_token = None
+        self.active_context = None
         self._lock = threading.Lock()
 
-    def set_active_job(self, job_id, attempt_id, lease_token):
+    def set_active_job(self, context: JobExecutionContext):
         with self._lock:
-            self.active_job_id = job_id
-            self.active_attempt_id = attempt_id
-            self.active_lease_token = lease_token
+            self.active_context = context
 
     def clear_active_job(self):
         with self._lock:
-            self.active_job_id = None
-            self.active_attempt_id = None
-            self.active_lease_token = None
+            self.active_context = None
 
     def run(self):
         with sqlite3.connect(self.store.db_path) as conn:
@@ -46,28 +40,25 @@ class HeartbeatThread(threading.Thread):
                         "UPDATE worker_state SET heartbeat_at = ? WHERE run_id = ? AND worker_id = ?",
                         (now, self.run_id, self.worker_id),
                     )
+
+                    with self._lock:
+                        ctx = self.active_context
+
+                    if ctx:
+                        try:
+                            self.store.renew_lease(ctx.job_id, ctx.attempt_id, ctx.lease_token)
+                        except LeaseLostError:
+                            ctx.lease_lost_event.set()
+
                     conn.commit()
                 except sqlite3.OperationalError:
                     pass
 
-                with self._lock:
-                    jid = self.active_job_id
-                    aid = self.active_attempt_id
-                    lt = self.active_lease_token
-
-                if jid and aid and lt:
-                    try:
-                        self.store.renew_lease(jid, aid, lt, lease_seconds=900)
-                    except Exception as e:
-                        print(f"Heartbeat failed to renew lease: {e}")
-
-                for _ in range(60):  # 60 seconds interval, check running every 1 second
-                    if not self.running:
-                        break
-                    time.sleep(1)
+                time.sleep(3)
 
     def stop(self):
         self.running = False
+        self.join()
 
 
 def run_worker_loop(
@@ -215,17 +206,33 @@ def run_worker_loop(
                 )
 
                 # Double check content hash (load_and_reconstruct_unit already throws if mismatch)
-                success = worker.run_one(job, unit)
+                ctx = JobExecutionContext(
+                    job_id=job["job_id"],
+                    attempt_id=job["attempt_id"],
+                    lease_token=job["lease_token"],
+                )
+                heartbeat.set_active_job(ctx)
+
+                success = worker.run_one(job, unit, ctx)
+                heartbeat.clear_active_job()
                 if success:
                     print(f"Job {job['job_id']} completed successfully.")
                 else:
                     print(f"Job {job['job_id']} failed logic.")
             except ValueError as e:
                 print(f"Job {job['job_id']} failed reconstruction: {e}")
-                store.fail_job(job["job_id"], "unit_content_hash_mismatch", str(e))
+                store.fail_job(
+                    job["job_id"],
+                    job["attempt_id"],
+                    job["lease_token"],
+                    "unit_content_hash_mismatch",
+                    str(e),
+                )
             except Exception as e:
                 print(f"Job {job['job_id']} failed unexpected: {e}")
-                store.fail_job(job["job_id"], "unexpected_error", str(e))
+                store.fail_job(
+                    job["job_id"], job["attempt_id"], job["lease_token"], "unexpected_error", str(e)
+                )
 
             with sqlite3.connect(store.db_path) as conn:
                 import datetime

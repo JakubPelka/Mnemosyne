@@ -138,14 +138,15 @@ def _validate_snake_case_list(v):
     return v
 
 
-class SemanticConceptV3(BaseModel):
+class SemanticConceptV3ModelOutput(BaseModel):
     concept_id: str = Field(pattern=r"^C[1-8]$")
     surface_label: str
     preferred_label: str
     language: str
-    entity_types: List[str] = Field(default_factory=list, min_length=1, max_length=3)
-    domains: List[str] = Field(default_factory=list, min_length=1, max_length=5)
+    entity_types: List[str] = Field(default_factory=list, max_length=3)
+    domains: List[str] = Field(default_factory=list, max_length=5)
     context_roles: List[str] = Field(default_factory=list, max_length=3)
+
     importance: float = Field(ge=0.0, le=1.0)
     confidence: float = Field(ge=0.0, le=1.0)
     evidence: List[str] = Field(default_factory=list)
@@ -156,7 +157,7 @@ class SemanticConceptV3(BaseModel):
         return _validate_snake_case_list(v)
 
 
-class SemanticRelationV3(BaseModel):
+class SemanticRelationV3ModelOutput(BaseModel):
     subject_concept_id: str = Field(pattern=r"^C[1-8]$")
     predicate: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     object_concept_id: str = Field(pattern=r"^C[1-8]$")
@@ -164,20 +165,19 @@ class SemanticRelationV3(BaseModel):
     evidence: List[str] = Field(default_factory=list)
 
 
-class TaggerOutputV3(BaseModel):
+class TaggerOutputV3ModelOutput(BaseModel):
     schema_version: Literal["semantic-tags-v3"] = "semantic-tags-v3"
     languages: List[str] = Field(description="Zidentyfikowane jezyki")
     content_types: List[str]
     unit_quality: Literal["meaningful", "junk"]
-    concepts: List[SemanticConceptV3] = Field(default_factory=list, max_length=8)
-    relations: List[SemanticRelationV3] = Field(default_factory=list, max_length=8)
+    concepts: List[SemanticConceptV3ModelOutput] = Field(default_factory=list, max_length=8)
+    relations: List[SemanticRelationV3ModelOutput] = Field(default_factory=list, max_length=8)
 
     @model_validator(mode="after")
     def validate_unit_quality(self):
         if self.unit_quality == "meaningful":
             if not self.concepts:
                 raise ValueError("meaningful unit must have at least one concept")
-            # The min_length=1 on entity_types/domains already ensures each concept has them.
         elif self.unit_quality == "junk":
             if self.concepts or self.relations:
                 raise ValueError("junk unit must have empty concepts and relations")
@@ -211,4 +211,50 @@ class TaggerOutputV3(BaseModel):
                 if not re.match(r"^E[1-9][0-9]*$", e):
                     raise ValueError(f"Invalid evidence alias format: {e}")
 
+        return self
+
+
+class SemanticConceptV3Stored(BaseModel):
+    concept_id: str = Field(pattern=r"^C[1-8]$")
+    surface_label: str
+    preferred_label: str
+    language: str
+    entity_types: List[str] = Field(default_factory=list, min_length=1, max_length=3)
+    domains: List[str] = Field(default_factory=list, min_length=1, max_length=5)
+    context_roles: List[str] = Field(default_factory=list, max_length=3)
+
+    importance: float = Field(ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence_event_ids: List[str] = Field(default_factory=list)
+
+    @field_validator("entity_types", "domains", "context_roles")
+    @classmethod
+    def validate_snake_case(cls, v):
+        return _validate_snake_case_list(v)
+
+
+class SemanticRelationV3Stored(BaseModel):
+    subject_concept_id: str = Field(pattern=r"^C[1-8]$")
+    predicate: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    object_concept_id: str = Field(pattern=r"^C[1-8]$")
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence_event_ids: List[str] = Field(default_factory=list)
+
+
+class TaggerOutputV3Stored(BaseModel):
+    schema_version: Literal["semantic-tags-v3"] = "semantic-tags-v3"
+    languages: List[str] = Field(description="Zidentyfikowane jezyki")
+    content_types: List[str]
+    unit_quality: Literal["meaningful", "junk"]
+    concepts: List[SemanticConceptV3Stored] = Field(default_factory=list, max_length=8)
+    relations: List[SemanticRelationV3Stored] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def validate_unit_quality(self):
+        if self.unit_quality == "meaningful":
+            if not self.concepts:
+                raise ValueError("meaningful unit must have at least one concept")
+        elif self.unit_quality == "junk":
+            if self.concepts or self.relations:
+                raise ValueError("junk unit must have empty concepts and relations")
         return self
