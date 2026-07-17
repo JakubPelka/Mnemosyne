@@ -173,6 +173,7 @@ def test_audit_retry_numbering(test_db_paths):
         contains_logs = False
         contains_urls = False
         content = "test"
+        event_ids = []
 
     worker.run_one(
         {
