@@ -254,11 +254,13 @@ class JobStore:
             expires_str = expires.isoformat()
 
             run_row = conn.execute(
-                "SELECT settings_json FROM tagging_run WHERE run_id = ?", (run_id,)
+                "SELECT * FROM tagging_run WHERE run_id = ?", (run_id,)
             ).fetchone()
             settings = json.loads(run_row["settings_json"]) if run_row else {}
             num_predict = settings.get("num_predict", 2048)
             request_timeout_seconds = settings.get("request_timeout_seconds", 3600)
+
+            num_ctx = settings.get("num_ctx", 8192)
 
             generation_config_hash = hashlib.sha256(
                 json.dumps(
@@ -268,6 +270,7 @@ class JobStore:
                         "seed": settings.get("seed", 42),
                         "stream": settings.get("stream", False),
                         "num_predict": num_predict,
+                        "num_ctx": num_ctx,
                         "request_timeout_seconds": request_timeout_seconds,
                     },
                     sort_keys=True,
@@ -303,7 +306,11 @@ class JobStore:
             job_dict["attempt_id"] = attempt_id
             job_dict["lease_token"] = lease_token
             job_dict["num_predict"] = num_predict
+            job_dict["num_ctx"] = num_ctx
             job_dict["seed"] = settings.get("seed", 42)
+            job_dict["settings"] = settings
+            job_dict["prompt_version"] = run_row["prompt_version"] if run_row and run_row["prompt_version"] else None
+            job_dict["schema_version"] = run_row["schema_version"] if run_row and run_row["schema_version"] else None
             return job_dict
 
     def renew_lease(self, worker_id: str, lease_token: str, lease_seconds: int = 600):
@@ -383,6 +390,30 @@ class JobStore:
             conn.execute(
                 "UPDATE tagging_attempt SET status = 'done', completed_at = ?, elapsed_ms = ?, output_hash = ?, prompt_tokens = ?, completion_tokens = ? WHERE attempt_id = ?",
                 (now, elapsed_ms, output_hash, prompt_tokens, completion_tokens, attempt_id),
+            )
+
+    def record_attempt_response_metadata(
+        self,
+        attempt_id: str,
+        job_id: str,
+        lease_token: str,
+        elapsed_ms: int,
+        prompt_tokens: int,
+        completion_tokens: int,
+        done_reason: str,
+    ):
+        with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM tagging_job WHERE job_id = ? AND status = 'running' AND lease_token = ?",
+                (job_id, lease_token),
+            ).fetchone()
+            if not row:
+                raise RuntimeError(f"Cannot record metadata: lease expired or invalid token for job {job_id}")
+            
+            conn.execute(
+                "UPDATE tagging_attempt SET elapsed_ms = ?, prompt_tokens = ?, completion_tokens = ?, done_reason = ? WHERE attempt_id = ?",
+                (elapsed_ms, prompt_tokens, completion_tokens, done_reason, attempt_id),
             )
 
     def retry_job(self, job_id: str, reason: str):

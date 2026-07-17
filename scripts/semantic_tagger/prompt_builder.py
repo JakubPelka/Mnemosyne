@@ -3,10 +3,19 @@ from pathlib import Path
 from scripts.semantic_tagger.schemas import TaggerOutput
 
 
+PROMPT_MAP = {
+    "semantic-hybrid-v1": "prompts/semantic_hybrid_v1.md",
+    "semantic-hybrid-v2": "prompts/semantic_hybrid_v2.md",
+}
+
+
 def build_tagger_prompt(
-    contains_code: bool, contains_logs: bool, contains_urls: bool, content: str
+    prompt_version: str, contains_code: bool, contains_logs: bool, contains_urls: bool, content: str
 ) -> str:
-    prompt_path = Path("prompts/semantic_hybrid_v1.md")
+    if prompt_version not in PROMPT_MAP:
+        raise ValueError(f"Unknown prompt version: {prompt_version}")
+
+    prompt_path = Path(PROMPT_MAP[prompt_version])
     if not prompt_path.exists():
         raise FileNotFoundError(f"Missing prompt file: {prompt_path}")
 

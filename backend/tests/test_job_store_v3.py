@@ -130,6 +130,7 @@ def test_generation_config_hash_in_attempt(store):
                     "seed": 42,
                     "stream": False,
                     "num_predict": 50,
+                        "num_ctx": 8192,
                     "request_timeout_seconds": 3600,
                 },
                 sort_keys=True,

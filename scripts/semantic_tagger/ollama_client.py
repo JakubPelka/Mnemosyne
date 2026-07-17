@@ -4,6 +4,16 @@ import urllib.error
 from typing import Dict, Any, Tuple
 from pydantic import ValidationError
 from scripts.semantic_tagger.schemas import TaggerOutput
+from dataclasses import dataclass
+
+@dataclass
+class OllamaGenerationResult:
+    output_text: str
+    prompt_tokens: int
+    completion_tokens: int
+    elapsed_ms: int
+    done_reason: str
+
 
 OLLAMA_URL = "http://127.0.0.1:11434"
 
@@ -35,14 +45,14 @@ class OllamaClient:
             return "unknown"
 
     def generate_tags(
-        self, prompt: str, schema_json: dict, num_predict: int = 2048, seed: int = 42
-    ) -> Tuple[TaggerOutput, int, int, str]:
+        self, prompt: str, schema_json: dict, num_predict: int = 4096, seed: int = 42, num_ctx: int = 8192
+    ) -> OllamaGenerationResult:
         payload = {
             "model": self.model,
             "prompt": prompt,
             "stream": False,
             "format": schema_json,
-            "options": {"temperature": 0.0, "num_predict": num_predict, "seed": seed},
+            "options": {"temperature": 0.0, "num_predict": num_predict, "seed": seed, "num_ctx": num_ctx},
         }
 
         req = urllib.request.Request(
@@ -63,16 +73,16 @@ class OllamaClient:
                 prompt_tokens = resp_data.get("prompt_eval_count", 0)
                 completion_tokens = resp_data.get("eval_count", 0)
 
-                # Parse JSON and validate
-                try:
-                    parsed_json = json.loads(output_text)
-                    valid_output = TaggerOutput(**parsed_json)
-                    done_reason = resp_data.get("done_reason", "")
-                    return valid_output, prompt_tokens, completion_tokens, done_reason
-                except json.JSONDecodeError as e:
-                    raise OllamaError(f"Invalid JSON returned: {e}")
-                except ValidationError as e:
-                    raise OllamaError(f"Schema validation failed: {e}")
+                done_reason = resp_data.get("done_reason", "")
+                total_duration_ns = resp_data.get("total_duration", 0)
+                elapsed_ms = int(total_duration_ns / 1_000_000)
+                return OllamaGenerationResult(
+                    output_text=output_text,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    elapsed_ms=elapsed_ms,
+                    done_reason=done_reason
+                )
 
         except urllib.error.URLError as e:
             raise OllamaError(f"Network error communicating with Ollama: {e}")

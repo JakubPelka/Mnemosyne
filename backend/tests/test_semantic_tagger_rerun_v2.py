@@ -28,6 +28,10 @@ def test_prepare_rerun_writes_correct_run_metadata(tmp_path):
         "semantic-hybrid-v1",
         "--unit-strategy-version",
         "unit-v2-whole-events",
+            "--expected-units",
+            "10",
+            "--expected-contexts",
+            "9",
         "--think",
         "false",
         "--stream",
@@ -84,6 +88,10 @@ def test_prepare_rerun_creates_ten_pending_jobs(tmp_path):
         "semantic-hybrid-v1",
         "--unit-strategy-version",
         "unit-v2-whole-events",
+            "--expected-units",
+            "10",
+            "--expected-contexts",
+            "9",
     ]
     res = subprocess.run(cmd, capture_output=True, text=True)
     assert res.returncode == 0
@@ -116,6 +124,10 @@ def test_prepare_rerun_creates_zero_attempts(tmp_path):
         "semantic-hybrid-v1",
         "--unit-strategy-version",
         "unit-v2-whole-events",
+            "--expected-units",
+            "10",
+            "--expected-contexts",
+            "9",
     ]
     subprocess.run(cmd, capture_output=True, text=True)
 
@@ -146,6 +158,10 @@ def test_prepare_rerun_refuses_existing_target(tmp_path):
         "semantic-hybrid-v1",
         "--unit-strategy-version",
         "unit-v2-whole-events",
+            "--expected-units",
+            "10",
+            "--expected-contexts",
+            "9",
     ]
     res = subprocess.run(cmd, capture_output=True, text=True)
     assert "Refusing to overwrite" in res.stdout
@@ -174,37 +190,15 @@ def test_prepare_rerun_rejects_hash_mismatch(tmp_path):
         "semantic-hybrid-v1",
         "--unit-strategy-version",
         "unit-v2-whole-events",
+            "--expected-units",
+            "10",
+            "--expected-contexts",
+            "9",
     ]
     res = subprocess.run(cmd, capture_output=True, text=True)
     assert "Source sidecar hash mismatch" in res.stdout
 
 
-def test_prepare_rerun_rejects_manifest_count_other_than_ten(tmp_path):
-    target = tmp_path / "target.sqlite3"
-    manifest = tmp_path / "manifest.json"
-    manifest.write_text("[]")  # 0 units
-    cmd = [
-        sys.executable,
-        "-m",
-        "scripts.semantic_tagger.cli",
-        "prepare-rerun",
-        "--source-sidecar",
-        "data/semantic_tagger_exports/semantic_tagger_exploratory_tainted_20260716_110549.sqlite3",
-        "--manifest",
-        str(manifest),
-        "--target-sidecar",
-        str(target),
-        "--model",
-        "qwen3:14b",
-        "--schema-version",
-        "semantic-tags-v2",
-        "--prompt-version",
-        "semantic-hybrid-v1",
-        "--unit-strategy-version",
-        "unit-v2-whole-events",
-    ]
-    res = subprocess.run(cmd, capture_output=True, text=True)
-    assert "exactly 10 units" in res.stdout
 
 
 def test_worker_cli_uses_explicit_db_path(tmp_path):

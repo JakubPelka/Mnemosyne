@@ -72,10 +72,10 @@ class Concept(BaseModel):
     surface_label: str
     preferred_label: str
     language: str
-    entity_types: List[ConceptFacet] = Field(default_factory=list, max_items=5)
-    domains: List[ConceptFacet] = Field(default_factory=list, max_items=8)
-    context_roles: List[ConceptFacet] = Field(default_factory=list, max_items=5)
-    external_matches: List[ConceptMatch] = Field(default_factory=list, max_items=3)
+    entity_types: List[ConceptFacet] = Field(default_factory=list, max_length=3)
+    domains: List[ConceptFacet] = Field(default_factory=list, max_length=5)
+    context_roles: List[ConceptFacet] = Field(default_factory=list, max_length=3)
+    external_matches: List[ConceptMatch] = Field(default_factory=list, max_length=3)
     importance: float = Field(ge=0.0, le=1.0)
     confidence: float = Field(ge=0.0, le=1.0)
     evidence_event_ids: List[str]
@@ -102,8 +102,8 @@ class TaggerOutput(BaseModel):
     languages: List[str] = Field(description="Zidentyfikowane języki (np. pl, en, sv)")
     content_types: List[str]
     unit_quality: UnitQuality
-    concepts: List[Concept] = Field(max_length=12)
-    relations: List[Relation] = Field(max_length=12)
+    concepts: List[Concept] = Field(max_length=8)
+    relations: List[Relation] = Field(max_length=8)
 
 
 # Consolidated Conversation Schemas

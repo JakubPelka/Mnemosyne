@@ -120,15 +120,14 @@ def cmd_prepare_rerun(args):
 
     with open(manifest) as f:
         manifest_entries = json.load(f)
-
-    if len(manifest_entries) != 10:
-        print(f"Manifest must contain exactly 10 units, found {len(manifest_entries)}")
-        return
-
-    contexts = set(e["context_id"] for e in manifest_entries)
-    if len(contexts) != 9:
-        print(f"Manifest must contain exactly 9 contexts, found {len(contexts)}")
-        return
+        
+    unique_contexts = {entry["context_id"] for entry in manifest_entries if "context_id" in entry}
+    
+    if len(manifest_entries) != args.expected_units:
+        raise ValueError(f"Expected {args.expected_units} units, but manifest has {len(manifest_entries)}")
+        
+    if len(unique_contexts) != args.expected_contexts:
+        raise ValueError(f"Expected {args.expected_contexts} unique contexts, but manifest has {len(unique_contexts)}")
 
     store = JobStore(target_sidecar)
 
@@ -138,6 +137,7 @@ def cmd_prepare_rerun(args):
         "temperature": args.temperature,
         "seed": args.seed,
         "num_predict": args.num_predict,
+        "num_ctx": args.num_ctx,
         "request_timeout_seconds": args.request_timeout_seconds,
     }
 
@@ -193,8 +193,8 @@ def cmd_prepare_rerun(args):
             job_key = hashlib.sha256(job_key_raw.encode()).hexdigest()
             store.queue_job(job_key, run_id, new_u["unit_id"], new_u["content_hash"])
 
-    print("units = 10")
-    print("jobs_pending = 10")
+    print(f"units = {len(manifest_entries)}")
+    print(f"jobs_pending = {len(manifest_entries)}")
     print("attempts = 0")
     print(f"run_id = {run_id}")
 
@@ -775,8 +775,11 @@ def main():
     )
     parser_prepare_rerun.add_argument("--temperature", type=int, default=0)
     parser_prepare_rerun.add_argument("--seed", type=int, default=42)
-    parser_prepare_rerun.add_argument("--num-predict", type=int, default=2048)
+    parser_prepare_rerun.add_argument("--num-predict", type=int, default=4096)
+    parser_prepare_rerun.add_argument("--num-ctx", type=int, default=8192)
     parser_prepare_rerun.add_argument("--request-timeout-seconds", type=int, default=3600)
+    parser_prepare_rerun.add_argument("--expected-units", type=int, required=True)
+    parser_prepare_rerun.add_argument("--expected-contexts", type=int, required=True)
 
     parser_prep = subparsers.add_parser("prepare")
     parser_prep.add_argument("--sample", required=True)

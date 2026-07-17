@@ -17,12 +17,18 @@ class Worker:
 
         try:
             import time
+            import json
+            from pydantic import ValidationError
 
             start_time = time.time()
             from scripts.semantic_tagger.prompt_builder import build_tagger_prompt
 
+            prompt_version = job["prompt_version"]
+            if not prompt_version:
+                raise ValueError("Missing prompt_version in job configuration")
+
             prompt = build_tagger_prompt(
-                unit.contains_code, unit.contains_logs, unit.contains_urls, unit.content
+                prompt_version, unit.contains_code, unit.contains_logs, unit.contains_urls, unit.content
             )
 
             # If attempt 2, add warning. If attempt 3, restrict concepts to 6 and drop relations
@@ -33,21 +39,63 @@ class Worker:
 
             from scripts.semantic_tagger.schemas import TaggerOutput
 
+            schema_version = job["schema_version"]
+            if not schema_version:
+                raise ValueError("Missing schema_version in job configuration")
+
             schema_json = TaggerOutput.model_json_schema()
 
-            num_predict = job.get("num_predict", 2048)
-            seed = job.get("seed", 42)
-            output, p_tok, c_tok, done_reason = self.client.generate_tags(
-                prompt, schema_json, num_predict, seed
+            num_predict = job["settings"]["num_predict"] if "settings" in job and "num_predict" in job["settings"] else job["num_predict"]
+            seed = job["settings"]["seed"] if "settings" in job and "seed" in job["settings"] else job["seed"]
+            num_ctx = job["settings"]["num_ctx"] if "settings" in job and "num_ctx" in job["settings"] else job["num_ctx"]
+            
+            gen_res = self.client.generate_tags(
+                prompt, schema_json, num_predict=num_predict, seed=seed, num_ctx=num_ctx
             )
-            if done_reason == "length" or c_tok >= num_predict:
+            
+            # Record metadata immediately!
+            self.store.record_attempt_response_metadata(
+                job["attempt_id"],
+                job["job_id"],
+                job["lease_token"],
+                gen_res.elapsed_ms,
+                gen_res.prompt_tokens,
+                gen_res.completion_tokens,
+                gen_res.done_reason
+            )
+
+            if gen_res.done_reason == "length" or gen_res.completion_tokens >= num_predict:
                 self.store.fail_job(
                     job_id,
                     job["attempt_id"],
                     job["lease_token"],
                     "output_truncated",
                     "Output exceeded num_predict limit",
-                    done_reason,
+                    gen_res.done_reason,
+                )
+                return False
+
+            try:
+                parsed_json = json.loads(gen_res.output_text)
+                output = TaggerOutput(**parsed_json)
+            except json.JSONDecodeError as e:
+                self.store.fail_job(
+                    job_id,
+                    job["attempt_id"],
+                    job["lease_token"],
+                    "invalid_json",
+                    f"Invalid JSON returned: {e}",
+                    gen_res.done_reason,
+                )
+                return False
+            except ValidationError as e:
+                self.store.fail_job(
+                    job_id,
+                    job["attempt_id"],
+                    job["lease_token"],
+                    "validation_error",
+                    f"Schema validation failed: {e}",
+                    gen_res.done_reason,
                 )
                 return False
 
@@ -70,13 +118,13 @@ class Worker:
                     job_id,
                     job["attempt_id"],
                     job["lease_token"],
-                    "invalid_evidence",
+                    "validation_error",
                     "Output contained evidence_event_ids not present in the unit",
-                    "validation",
+                    gen_res.done_reason,
                 )
                 return False
 
-            elapsed_ms = int((time.time() - start_time) * 1000)
+            elapsed_ms = gen_res.elapsed_ms
             output_json = output.model_dump_json()
             output_hash = safe_hash(output_json)
 
@@ -87,8 +135,8 @@ class Worker:
                 output_json,
                 output_hash,
                 elapsed_ms,
-                p_tok,
-                c_tok,
+                gen_res.prompt_tokens,
+                gen_res.completion_tokens,
             )
 
             # Update vocabulary registry

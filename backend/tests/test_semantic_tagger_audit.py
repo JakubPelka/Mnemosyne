@@ -147,7 +147,7 @@ def test_audit_retry_numbering(test_db_paths):
     prompts_seen = []
 
     class MockClient:
-        def generate_tags(self, p, s, n=2048, seed=42):
+        def generate_tags(self, p, s, num_predict=4096, seed=42, num_ctx=8192):
             prompts_seen.append(p)
             from scripts.semantic_tagger.ollama_client import OllamaError
 
@@ -175,17 +175,53 @@ def test_audit_retry_numbering(test_db_paths):
         content = "test"
 
     worker.run_one(
-        {"job_id": "j1", "attempt_count": 1, "attempt_id": "a1", "lease_token": "l1"}, MockUnit()
+        {
+            "job_id": "j1",
+            "attempt_count": 1,
+            "attempt_id": "a1",
+            "lease_token": "l1",
+            "prompt_version": "semantic-hybrid-v1",
+            "schema_version": "semantic-tags-v1",
+            "settings": {"num_predict": 1024, "seed": 42, "num_ctx": 4096},
+            "num_predict": 1024,
+            "seed": 42,
+            "num_ctx": 4096,
+        },
+        MockUnit(),
     )
     assert "Ostatnia próba" not in prompts_seen[0]
 
     worker.run_one(
-        {"job_id": "j2", "attempt_count": 2, "attempt_id": "a2", "lease_token": "l2"}, MockUnit()
+        {
+            "job_id": "j2",
+            "attempt_count": 2,
+            "attempt_id": "a2",
+            "lease_token": "l2",
+            "prompt_version": "semantic-hybrid-v1",
+            "schema_version": "semantic-tags-v1",
+            "settings": {"num_predict": 1024, "seed": 42, "num_ctx": 4096},
+            "num_predict": 1024,
+            "seed": 42,
+            "num_ctx": 4096,
+        },
+        MockUnit(),
     )
     assert "Zwróć tylko 100% poprawne dane" in prompts_seen[1]
 
     worker.run_one(
-        {"job_id": "j3", "attempt_count": 3, "attempt_id": "a3", "lease_token": "l3"}, MockUnit()
+        {
+            "job_id": "j3",
+            "attempt_count": 3,
+            "attempt_id": "a3",
+            "lease_token": "l3",
+            "prompt_version": "semantic-hybrid-v1",
+            "schema_version": "semantic-tags-v1",
+            "settings": {"num_predict": 1024, "seed": 42, "num_ctx": 4096},
+            "num_predict": 1024,
+            "seed": 42,
+            "num_ctx": 4096,
+        },
+        MockUnit(),
     )
     assert "Zwróć maksymalnie 6 pojęć" in prompts_seen[2]
 
@@ -296,6 +332,7 @@ def test_max_claims_counts_claims_not_loop_iterations(tmp_path):
             "settings": {},
             "schema_version": "v1",
             "unit_strategy_version": "v1",
+            "prompt_version": "semantic-hybrid-v1",
         }
     )
 
@@ -351,6 +388,7 @@ def test_target_done_counts_successes_for_selected_run(tmp_path):
             "settings": {},
             "schema_version": "v1",
             "unit_strategy_version": "v1",
+            "prompt_version": "semantic-hybrid-v1",
         }
     )
 
@@ -381,6 +419,7 @@ def test_failed_job_requires_explicit_retry(tmp_path):
             "settings": {},
             "schema_version": "v1",
             "unit_strategy_version": "v1",
+            "prompt_version": "semantic-hybrid-v1",
         }
     )
 
@@ -436,6 +475,7 @@ def test_no_job_available_does_not_consume_claim(tmp_path):
             "settings": {},
             "schema_version": "v1",
             "unit_strategy_version": "v1",
+            "prompt_version": "semantic-hybrid-v1",
         }
     )
 
@@ -461,6 +501,7 @@ def test_stale_worker_cannot_complete_after_takeover(tmp_path):
             "settings": {},
             "schema_version": "v1",
             "unit_strategy_version": "v1",
+            "prompt_version": "semantic-hybrid-v1",
         }
     )
 
@@ -494,6 +535,7 @@ def test_heartbeat_uses_configured_sidecar(tmp_path):
             "settings": {},
             "schema_version": "v1",
             "unit_strategy_version": "v1",
+            "prompt_version": "semantic-hybrid-v1",
         }
     )
 
@@ -530,6 +572,7 @@ def test_claimed_job_contains_generation_settings(tmp_path):
         "temperature": 0.0,
         "seed": 42,
         "num_predict": 2048,
+        "num_ctx": 8192,
         "request_timeout_seconds": 3600,
     }
     run_id = store.create_run(
@@ -538,6 +581,7 @@ def test_claimed_job_contains_generation_settings(tmp_path):
             "settings": settings,
             "schema_version": "v1",
             "unit_strategy_version": "v1",
+            "prompt_version": "semantic-hybrid-v1",
         }
     )
 
@@ -561,17 +605,24 @@ def test_worker_passes_generation_settings_to_client(tmp_path):
     # fake return valid_output, prompt_tokens, completion_tokens, done_reason
     mock_out = mock.MagicMock()
     mock_out.model_dump_json.return_value = "{}"
-    client.generate_tags.return_value = (mock_out, 10, 10, "stop")
+    from scripts.semantic_tagger.ollama_client import OllamaGenerationResult
+    client.generate_tags.return_value = OllamaGenerationResult("{}", 10, 10, 100, "stop")
     worker = Worker(store, client)
     store.complete_job = mock.MagicMock()
+    store.fail_job = mock.MagicMock()
+    store.record_attempt_response_metadata = mock.MagicMock()
 
     job = {
         "job_id": "j1",
         "attempt_count": 1,
         "attempt_id": "a1",
         "lease_token": "tok",
+        "prompt_version": "semantic-hybrid-v1",
+        "schema_version": "semantic-tags-v1",
+        "settings": {"num_predict": 1024, "seed": 99, "num_ctx": 8192},
         "num_predict": 1024,
         "seed": 99,
+        "num_ctx": 8192,
     }
     unit = mock.MagicMock()
     unit.render_prompt.return_value = "prompt"
@@ -580,8 +631,9 @@ def test_worker_passes_generation_settings_to_client(tmp_path):
 
     client.generate_tags.assert_called_once()
     args, kwargs = client.generate_tags.call_args
-    assert args[2] == 1024  # num_predict
-    assert args[3] == 99  # seed
+    assert kwargs['num_predict'] == 1024  # num_predict
+    assert kwargs['seed'] == 99  # seed
+    assert kwargs['num_ctx'] == 8192
 
 
 def test_ollama_payload_contains_num_predict_and_seed():
@@ -656,6 +708,7 @@ def test_truncated_response_is_failed_as_output_truncated(tmp_path):
             "settings": {},
             "schema_version": "v1",
             "unit_strategy_version": "v1",
+            "prompt_version": "semantic-hybrid-v1",
         }
     )
 
@@ -672,9 +725,12 @@ def test_truncated_response_is_failed_as_output_truncated(tmp_path):
 
     client = mock.MagicMock()
     # return done_reason="length"
-    client.generate_tags.return_value = (mock.MagicMock(), 10, 10, "length")
+    from scripts.semantic_tagger.ollama_client import OllamaGenerationResult
+    client.generate_tags.return_value = OllamaGenerationResult("{}", 10, 4096, 100, "length")
     worker = Worker(store, client)
     store.complete_job = mock.MagicMock()
+    
+    store.record_attempt_response_metadata = mock.MagicMock()
 
     unit = mock.MagicMock()
     unit.render_prompt.return_value = "prompt"
@@ -703,6 +759,7 @@ def test_report_computes_json_rate_with_mixed_outcomes(tmp_path, capsys):
             "settings_json": "{}",
             "schema_version": "v1",
             "unit_strategy_version": "v1",
+            "prompt_version": "semantic-hybrid-v1",
         }
     )
 
