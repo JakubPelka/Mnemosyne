@@ -1,0 +1,14 @@
+[Unit]
+Description=Mnemosyne Semantic Tagger Worker (Instance %i)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/bin/bash -lc "cd /path/to/Mnemosyne && .venv/bin/python -m scripts.semantic_tagger.cli worker"
+Restart=on-failure
+RestartSec=30
+KillSignal=SIGTERM
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target
