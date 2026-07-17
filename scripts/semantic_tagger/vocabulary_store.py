@@ -60,6 +60,22 @@ class VocabularyStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS vocabulary_occurrence (
+                    occurrence_id TEXT PRIMARY KEY,
+                    candidate_id TEXT NOT NULL,
+                    dimension TEXT NOT NULL,
+                    run_id TEXT NOT NULL,
+                    job_id TEXT NOT NULL,
+                    unit_id TEXT NOT NULL,
+                    concept_id TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(candidate_id, run_id, unit_id, concept_id, dimension)
+                )
+                """
+            )
 
     def upsert_concept(
         self, dimension: str, original_label: str, confidence: float, language: str = "sv"
@@ -80,7 +96,7 @@ class VocabularyStore:
                 new_max_confidence = max(row[1], confidence)
                 conn.execute(
                     """
-                    UPDATE vocabulary_candidate 
+                    UPDATE vocabulary_candidate
                     SET occurrence_count = occurrence_count + 1,
                         last_seen_at = ?,
                         max_confidence = ?
@@ -92,7 +108,7 @@ class VocabularyStore:
                 candidate_id = str(uuid.uuid4())
                 conn.execute(
                     """
-                    INSERT INTO vocabulary_candidate 
+                    INSERT INTO vocabulary_candidate
                     (candidate_id, dimension, normalized_label, preferred_label, language, status, first_seen_at, last_seen_at, occurrence_count, max_confidence, created_by)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
@@ -120,4 +136,135 @@ class VocabularyStore:
             conn.execute(
                 "INSERT OR IGNORE INTO vocabulary_label (candidate_id, label, language, label_kind) VALUES (?, ?, ?, ?)",
                 (candidate_id, original_label, language, "original_surface"),
+            )
+
+    def upsert_occurrence_v3(
+        self,
+        dimension: str,
+        original_label: str,
+        language: str,
+        confidence: float,
+        run_id: str,
+        job_id: str,
+        unit_id: str,
+        concept_id: str,
+    ):
+        normalized = normalize_label(original_label)
+        now = datetime.datetime.now(datetime.UTC).isoformat()
+
+        with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
+            # Check if candidate exists
+            cursor = conn.execute(
+                "SELECT candidate_id, max_confidence FROM vocabulary_candidate WHERE dimension = ? AND normalized_label = ? AND language = ?",
+                (dimension, normalized, language),
+            )
+            row = cursor.fetchone()
+
+            if row:
+                candidate_id = row[0]
+                new_max_confidence = max(row[1], confidence)
+                conn.execute(
+                    "UPDATE vocabulary_candidate SET last_seen_at = ?, max_confidence = ? WHERE candidate_id = ?",
+                    (now, new_max_confidence, candidate_id),
+                )
+            else:
+                candidate_id = str(uuid.uuid4())
+                conn.execute(
+                    """
+                    INSERT INTO vocabulary_candidate
+                    (candidate_id, dimension, normalized_label, preferred_label, language, status, first_seen_at, last_seen_at, occurrence_count, max_confidence, created_by)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        candidate_id,
+                        dimension,
+                        normalized,
+                        original_label,
+                        language,
+                        "local_candidate",
+                        now,
+                        now,
+                        0,  # Legacy occurrence_count kept intact, we will compute dynamically or update it via triggers
+                        confidence,
+                        "llm",
+                    ),
+                )
+                # Insert preferred label
+                conn.execute(
+                    "INSERT OR IGNORE INTO vocabulary_label (candidate_id, label, language, label_kind) VALUES (?, ?, ?, ?)",
+                    (candidate_id, original_label, language, "preferred"),
+                )
+
+            # Always insert original surface label if it's new
+            conn.execute(
+                "INSERT OR IGNORE INTO vocabulary_label (candidate_id, label, language, label_kind) VALUES (?, ?, ?, ?)",
+                (candidate_id, original_label, language, "original_surface"),
+            )
+
+            # Record occurrence idempotently
+            try:
+                occurrence_id = str(uuid.uuid4())
+                conn.execute(
+                    """
+                    INSERT INTO vocabulary_occurrence
+                    (occurrence_id, candidate_id, dimension, run_id, job_id, unit_id, concept_id, confidence, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        occurrence_id,
+                        candidate_id,
+                        dimension,
+                        run_id,
+                        job_id,
+                        unit_id,
+                        concept_id,
+                        confidence,
+                        now,
+                    ),
+                )
+
+                # Update occurrence_count just to be somewhat backwards-compatible
+                conn.execute(
+                    "UPDATE vocabulary_candidate SET occurrence_count = (SELECT COUNT(*) FROM vocabulary_occurrence WHERE candidate_id = ?) WHERE candidate_id = ?",
+                    (candidate_id, candidate_id),
+                )
+            except sqlite3.IntegrityError:
+                # Already recorded this occurrence
+                pass
+
+    def update_from_tagger_output_v3(self, output, unit_id: str, run_id: str, job_id: str):
+        # concepts
+        for c in output.concepts:
+            # entities, domains, context_roles
+            for e_type in c.entity_types:
+                self.upsert_occurrence_v3(
+                    "entity_type", e_type, "en", c.confidence, run_id, job_id, unit_id, c.concept_id
+                )
+            for d in c.domains:
+                self.upsert_occurrence_v3(
+                    "domain", d, "en", c.confidence, run_id, job_id, unit_id, c.concept_id
+                )
+            for role in c.context_roles:
+                self.upsert_occurrence_v3(
+                    "context_role", role, "en", c.confidence, run_id, job_id, unit_id, c.concept_id
+                )
+
+        # relations
+        for r in output.relations:
+            # Stable relation ID based on endpoints and predicate and evidence
+            import hashlib
+            import json
+
+            ev_sorted = sorted(r.evidence)
+            sig = f"{unit_id}:{r.subject_concept_id}:{r.predicate}:{r.object_concept_id}:{json.dumps(ev_sorted)}"
+            rel_id = hashlib.sha256(sig.encode()).hexdigest()
+            self.upsert_occurrence_v3(
+                "relation_predicate",
+                r.predicate,
+                "en",
+                r.confidence,
+                run_id,
+                job_id,
+                unit_id,
+                rel_id,
             )

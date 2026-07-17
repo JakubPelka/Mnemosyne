@@ -1,7 +1,6 @@
 import time
 import threading
 import sqlite3
-from pathlib import Path
 
 from scripts.semantic_tagger.job_store import JobStore
 from scripts.semantic_tagger.ollama_client import OllamaClient
@@ -10,20 +9,38 @@ from scripts.semantic_tagger.content_loader import load_and_reconstruct_unit
 
 
 class HeartbeatThread(threading.Thread):
-    def __init__(self, db_path: Path, run_id: str, worker_id: str):
+    def __init__(self, store: JobStore, run_id: str, worker_id: str):
         super().__init__(daemon=True)
-        self.db_path = db_path
+        self.store = store
         self.run_id = run_id
         self.worker_id = worker_id
         self.running = True
+        self.active_job_id = None
+        self.active_attempt_id = None
+        self.active_lease_token = None
+        self._lock = threading.Lock()
+
+    def set_active_job(self, job_id, attempt_id, lease_token):
+        with self._lock:
+            self.active_job_id = job_id
+            self.active_attempt_id = attempt_id
+            self.active_lease_token = lease_token
+
+    def clear_active_job(self):
+        with self._lock:
+            self.active_job_id = None
+            self.active_attempt_id = None
+            self.active_lease_token = None
 
     def run(self):
-        # Własne połączenie SQLite dla wątku
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(self.store.db_path) as conn:
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA busy_timeout = 5000")
             while self.running:
                 import datetime
 
                 now = datetime.datetime.utcnow().isoformat()
+
                 try:
                     conn.execute(
                         "UPDATE worker_state SET heartbeat_at = ? WHERE run_id = ? AND worker_id = ?",
@@ -32,10 +49,22 @@ class HeartbeatThread(threading.Thread):
                     conn.commit()
                 except sqlite3.OperationalError:
                     pass
-                for _ in range(10):
+
+                with self._lock:
+                    jid = self.active_job_id
+                    aid = self.active_attempt_id
+                    lt = self.active_lease_token
+
+                if jid and aid and lt:
+                    try:
+                        self.store.renew_lease(jid, aid, lt, lease_seconds=900)
+                    except Exception as e:
+                        print(f"Heartbeat failed to renew lease: {e}")
+
+                for _ in range(60):  # 60 seconds interval, check running every 1 second
                     if not self.running:
                         break
-                    time.sleep(0.5)
+                    time.sleep(1)
 
     def stop(self):
         self.running = False
@@ -114,7 +143,7 @@ def run_worker_loop(
             print(f"Failed to acquire worker lock: {e}")
             return
 
-    heartbeat = HeartbeatThread(store.db_path, run_id, worker_id)
+    heartbeat = HeartbeatThread(store, run_id, worker_id)
     heartbeat.start()
 
     client = OllamaClient(model_name)

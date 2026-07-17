@@ -67,7 +67,7 @@ def test_renew_lease_with_token(store):
     job = store.claim_next_job(run_id, "w1")
 
     # Renew with correct token
-    store.renew_lease("w1", job["lease_token"], 300)
+    store.renew_lease(job["job_id"], job["attempt_id"], job["lease_token"], 300)
 
     with sqlite3.connect(store.db_path) as conn:
         conn.row_factory = sqlite3.Row
@@ -76,8 +76,10 @@ def test_renew_lease_with_token(store):
         ).fetchone()
         expires1 = j["lease_expires_at"]
 
-        # Renew with wrong token (should do nothing)
-        store.renew_lease("w1", "wrong-token", 900)
+        try:
+            store.renew_lease(job["job_id"], job["attempt_id"], "wrong-token", 900)
+        except RuntimeError:
+            pass
         j2 = conn.execute(
             "SELECT lease_expires_at FROM tagging_job WHERE job_id = ?", (job["job_id"],)
         ).fetchone()
@@ -130,7 +132,7 @@ def test_generation_config_hash_in_attempt(store):
                     "seed": 42,
                     "stream": False,
                     "num_predict": 50,
-                        "num_ctx": 8192,
+                    "num_ctx": 8192,
                     "request_timeout_seconds": 3600,
                 },
                 sort_keys=True,

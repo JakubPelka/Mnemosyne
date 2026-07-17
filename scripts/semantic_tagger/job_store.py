@@ -157,6 +157,10 @@ class JobStore:
 
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA synchronous = FULL")
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("PRAGMA busy_timeout = 5000")
             conn.executescript(SCHEMA)
 
     def _now(self):
@@ -220,13 +224,6 @@ class JobStore:
 
         with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
             conn.row_factory = sqlite3.Row
-
-            now = self._now()
-            conn.execute("UPDATE tagging_job SET status = 'failed' WHERE status = 'error'")
-            conn.execute(
-                "UPDATE tagging_job SET status = 'pending' WHERE status = 'running' AND lease_expires_at < ?",
-                (now,),
-            )
 
             row = conn.execute(
                 "SELECT * FROM tagging_job WHERE run_id = ? AND status = 'pending' AND attempt_count < 3 ORDER BY attempt_count ASC LIMIT 1",
@@ -309,31 +306,62 @@ class JobStore:
             job_dict["num_ctx"] = num_ctx
             job_dict["seed"] = settings.get("seed", 42)
             job_dict["settings"] = settings
-            job_dict["prompt_version"] = run_row["prompt_version"] if run_row and run_row["prompt_version"] else None
-            job_dict["schema_version"] = run_row["schema_version"] if run_row and run_row["schema_version"] else None
+            job_dict["prompt_version"] = (
+                run_row["prompt_version"] if run_row and run_row["prompt_version"] else None
+            )
+            job_dict["schema_version"] = (
+                run_row["schema_version"] if run_row and run_row["schema_version"] else None
+            )
             return job_dict
 
-    def renew_lease(self, worker_id: str, lease_token: str, lease_seconds: int = 600):
-        with sqlite3.connect(self.db_path) as conn:
+    def renew_lease(self, job_id: str, attempt_id: str, lease_token: str, lease_seconds: int = 900):
+        with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
             import datetime
 
             dt_now = datetime.datetime.utcnow()
             expires = dt_now + datetime.timedelta(seconds=lease_seconds)
-            conn.execute(
-                "UPDATE tagging_job SET lease_expires_at = ? WHERE worker_id = ? AND lease_token = ? AND status = 'running'",
-                (expires.isoformat(), worker_id, lease_token),
+            cursor = conn.execute(
+                "UPDATE tagging_job SET lease_expires_at = ? WHERE job_id = ? AND lease_token = ? AND status = 'running' AND EXISTS (SELECT 1 FROM tagging_attempt WHERE attempt_id = ? AND status = 'running')",
+                (expires.isoformat(), job_id, lease_token, attempt_id),
             )
+            if cursor.rowcount == 0:
+                raise RuntimeError("LeaseLostError: Cannot renew lease")
+
+    def set_run_status(self, run_id: str, new_status: str):
+        with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
+            conn.execute("UPDATE tagging_run SET status = ? WHERE run_id = ?", (new_status, run_id))
+
+    def get_run_status(self, run_id: str) -> str:
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT status FROM tagging_run WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            return row[0] if row else "unknown"
+
+    def recover_expired_leases(self, run_id: str):
+        with sqlite3.connect(self.db_path, isolation_level="IMMEDIATE") as conn:
+            now = self._now()
+            # find running jobs with expired lease
+            rows = conn.execute(
+                "SELECT tj.job_id, ta.attempt_id FROM tagging_job tj JOIN tagging_attempt ta ON tj.job_id = ta.job_id WHERE tj.run_id = ? AND tj.status = 'running' AND tj.lease_expires_at < ? AND ta.status = 'running'",
+                (run_id, now),
+            ).fetchall()
+
+            for row in rows:
+                job_id, attempt_id = row
+                conn.execute(
+                    "UPDATE tagging_attempt SET status = 'interrupted', error_code = 'stale_lease' WHERE attempt_id = ?",
+                    (attempt_id,),
+                )
+                conn.execute(
+                    "UPDATE tagging_job SET status = 'pending', lease_started_at = NULL, lease_expires_at = NULL, lease_token = NULL WHERE job_id = ?",
+                    (job_id,),
+                )
 
     def get_pending_jobs(self, run_id: str, limit: int = 10) -> List[Dict]:
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
             # Restore expired leases
-            now = self._now()
-            conn.execute("UPDATE tagging_job SET status = 'failed' WHERE status = 'error'")
-            conn.execute(
-                "UPDATE tagging_job SET status = 'pending' WHERE status = 'running' AND lease_expires_at < ?",
-                (now,),
-            )
 
             rows = conn.execute(
                 "SELECT * FROM tagging_job WHERE run_id = ? AND status = 'pending' AND attempt_count < 3 ORDER BY attempt_count ASC LIMIT ?",
@@ -369,8 +397,8 @@ class JobStore:
             conn.row_factory = sqlite3.Row
             now = self._now()
             row = conn.execute(
-                "SELECT * FROM tagging_job WHERE job_id = ? AND status = 'running' AND lease_token = ?",
-                (job_id, lease_token),
+                "SELECT * FROM tagging_job tj JOIN tagging_attempt ta ON tj.job_id = ta.job_id WHERE tj.job_id = ? AND ta.attempt_id = ? AND tj.lease_token = ? AND tj.status = 'running' AND ta.status = 'running'",
+                (job_id, attempt_id, lease_token),
             ).fetchone()
             if not row:
                 raise RuntimeError("Cannot complete job: lease expired or invalid token")
@@ -409,8 +437,10 @@ class JobStore:
                 (job_id, lease_token),
             ).fetchone()
             if not row:
-                raise RuntimeError(f"Cannot record metadata: lease expired or invalid token for job {job_id}")
-            
+                raise RuntimeError(
+                    f"Cannot record metadata: lease expired or invalid token for job {job_id}"
+                )
+
             conn.execute(
                 "UPDATE tagging_attempt SET elapsed_ms = ?, prompt_tokens = ?, completion_tokens = ?, done_reason = ? WHERE attempt_id = ?",
                 (elapsed_ms, prompt_tokens, completion_tokens, done_reason, attempt_id),

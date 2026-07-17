@@ -28,10 +28,10 @@ def test_prepare_rerun_writes_correct_run_metadata(tmp_path):
         "semantic-hybrid-v1",
         "--unit-strategy-version",
         "unit-v2-whole-events",
-            "--expected-units",
-            "10",
-            "--expected-contexts",
-            "9",
+        "--expected-units",
+        "10",
+        "--expected-contexts",
+        "9",
         "--think",
         "false",
         "--stream",
@@ -88,10 +88,10 @@ def test_prepare_rerun_creates_ten_pending_jobs(tmp_path):
         "semantic-hybrid-v1",
         "--unit-strategy-version",
         "unit-v2-whole-events",
-            "--expected-units",
-            "10",
-            "--expected-contexts",
-            "9",
+        "--expected-units",
+        "10",
+        "--expected-contexts",
+        "9",
     ]
     res = subprocess.run(cmd, capture_output=True, text=True)
     assert res.returncode == 0
@@ -124,10 +124,10 @@ def test_prepare_rerun_creates_zero_attempts(tmp_path):
         "semantic-hybrid-v1",
         "--unit-strategy-version",
         "unit-v2-whole-events",
-            "--expected-units",
-            "10",
-            "--expected-contexts",
-            "9",
+        "--expected-units",
+        "10",
+        "--expected-contexts",
+        "9",
     ]
     subprocess.run(cmd, capture_output=True, text=True)
 
@@ -158,10 +158,10 @@ def test_prepare_rerun_refuses_existing_target(tmp_path):
         "semantic-hybrid-v1",
         "--unit-strategy-version",
         "unit-v2-whole-events",
-            "--expected-units",
-            "10",
-            "--expected-contexts",
-            "9",
+        "--expected-units",
+        "10",
+        "--expected-contexts",
+        "9",
     ]
     res = subprocess.run(cmd, capture_output=True, text=True)
     assert "Refusing to overwrite" in res.stdout
@@ -190,15 +190,13 @@ def test_prepare_rerun_rejects_hash_mismatch(tmp_path):
         "semantic-hybrid-v1",
         "--unit-strategy-version",
         "unit-v2-whole-events",
-            "--expected-units",
-            "10",
-            "--expected-contexts",
-            "9",
+        "--expected-units",
+        "10",
+        "--expected-contexts",
+        "9",
     ]
     res = subprocess.run(cmd, capture_output=True, text=True)
     assert "Source sidecar hash mismatch" in res.stdout
-
-
 
 
 def test_worker_cli_uses_explicit_db_path(tmp_path):

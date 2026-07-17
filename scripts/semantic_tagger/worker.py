@@ -16,43 +16,63 @@ class Worker:
         attempt = job["attempt_count"]
 
         try:
-            import time
             import json
             from pydantic import ValidationError
-
-            start_time = time.time()
             from scripts.semantic_tagger.prompt_builder import build_tagger_prompt
 
             prompt_version = job["prompt_version"]
             if not prompt_version:
                 raise ValueError("Missing prompt_version in job configuration")
 
-            prompt = build_tagger_prompt(
-                prompt_version, unit.contains_code, unit.contains_logs, unit.contains_urls, unit.content
+            prompt_res = build_tagger_prompt(
+                prompt_version,
+                unit.contains_code,
+                unit.contains_logs,
+                unit.contains_urls,
+                unit.content,
             )
+            prompt = prompt_res.prompt
+            evidence_alias_to_event_id = prompt_res.evidence_alias_to_event_id
 
-            # If attempt 2, add warning. If attempt 3, restrict concepts to 6 and drop relations
             if attempt == 2:
-                prompt += "\n\nOstatnia próba zakończyła się błędem schematu. Zwróć tylko 100% poprawne dane, używając poprawnego JSON."
+                if job.get("retry_reason") == "facets_missing":
+                    prompt += "\n\nThe previous response omitted required facets.\nReturn fewer concepts if necessary.\nEvery concept must contain at least one entity_type and one domain."
+                else:
+                    prompt += "\n\nOstatnia próba zakończyła się błędem schematu. Zwróć tylko 100% poprawne dane, używając poprawnego JSON."
             elif attempt == 3:
                 prompt += "\n\nOstatnia próba zakończyła się błędem schematu. Zwróć maksymalnie 6 pojęć i 0 relacji."
-
-            from scripts.semantic_tagger.schemas import TaggerOutput
 
             schema_version = job["schema_version"]
             if not schema_version:
                 raise ValueError("Missing schema_version in job configuration")
 
-            schema_json = TaggerOutput.model_json_schema()
+            if schema_version == "semantic-tags-v3":
+                from scripts.semantic_tagger.schemas import TaggerOutputV3 as OutputSchema
+            else:
+                from scripts.semantic_tagger.schemas import TaggerOutput as OutputSchema
 
-            num_predict = job["settings"]["num_predict"] if "settings" in job and "num_predict" in job["settings"] else job["num_predict"]
-            seed = job["settings"]["seed"] if "settings" in job and "seed" in job["settings"] else job["seed"]
-            num_ctx = job["settings"]["num_ctx"] if "settings" in job and "num_ctx" in job["settings"] else job["num_ctx"]
-            
+            schema_json = OutputSchema.model_json_schema()
+
+            num_predict = (
+                job["settings"]["num_predict"]
+                if "settings" in job and "num_predict" in job["settings"]
+                else job.get("num_predict", 4096)
+            )
+            seed = (
+                job["settings"]["seed"]
+                if "settings" in job and "seed" in job["settings"]
+                else job.get("seed", 42)
+            )
+            num_ctx = (
+                job["settings"]["num_ctx"]
+                if "settings" in job and "num_ctx" in job["settings"]
+                else job.get("num_ctx", 8192)
+            )
+
             gen_res = self.client.generate_tags(
                 prompt, schema_json, num_predict=num_predict, seed=seed, num_ctx=num_ctx
             )
-            
+
             # Record metadata immediately!
             self.store.record_attempt_response_metadata(
                 job["attempt_id"],
@@ -61,7 +81,7 @@ class Worker:
                 gen_res.elapsed_ms,
                 gen_res.prompt_tokens,
                 gen_res.completion_tokens,
-                gen_res.done_reason
+                gen_res.done_reason,
             )
 
             if gen_res.done_reason == "length" or gen_res.completion_tokens >= num_predict:
@@ -77,7 +97,7 @@ class Worker:
 
             try:
                 parsed_json = json.loads(gen_res.output_text)
-                output = TaggerOutput(**parsed_json)
+                output = OutputSchema(**parsed_json)
             except json.JSONDecodeError as e:
                 self.store.fail_job(
                     job_id,
@@ -99,30 +119,86 @@ class Worker:
                 )
                 return False
 
-            # Post validation: evidence_event_ids must be within the provided context
-            valid_event_ids = set(unit.event_ids)
-            invalid_evidence = False
-            for concept in output.concepts:
-                for eid in concept.evidence_event_ids:
-                    if eid not in valid_event_ids:
-                        invalid_evidence = True
-                        break
-            for rel in output.relations:
-                for eid in rel.evidence_event_ids:
-                    if eid not in valid_event_ids:
-                        invalid_evidence = True
-                        break
+            if schema_version == "semantic-tags-v3":
+                # Validation of E aliases
+                invalid_evidence = False
+                for concept in output.concepts:
+                    mapped = []
+                    for eid in concept.evidence:
+                        if eid not in evidence_alias_to_event_id:
+                            invalid_evidence = True
+                            break
+                        mapped.append(evidence_alias_to_event_id[eid])
+                    concept.evidence = mapped
 
-            if invalid_evidence:
-                self.store.fail_job(
-                    job_id,
-                    job["attempt_id"],
-                    job["lease_token"],
-                    "validation_error",
-                    "Output contained evidence_event_ids not present in the unit",
-                    gen_res.done_reason,
-                )
-                return False
+                for rel in output.relations:
+                    mapped = []
+                    for eid in rel.evidence:
+                        if eid not in evidence_alias_to_event_id:
+                            invalid_evidence = True
+                            break
+                        mapped.append(evidence_alias_to_event_id[eid])
+                    rel.evidence = mapped
+
+                if invalid_evidence:
+                    self.store.fail_job(
+                        job_id,
+                        job["attempt_id"],
+                        job["lease_token"],
+                        "validation_error",
+                        "Output contained unknown evidence aliases",
+                        gen_res.done_reason,
+                    )
+                    return False
+
+                # Quality gate
+                if output.unit_quality == "meaningful":
+                    if not output.concepts:
+                        self.store.fail_job(
+                            job_id,
+                            job["attempt_id"],
+                            job["lease_token"],
+                            "facets_missing",
+                            "Missing concepts",
+                            gen_res.done_reason,
+                        )
+                        return False
+                    for concept in output.concepts:
+                        if not concept.entity_types or not concept.domains:
+                            self.store.fail_job(
+                                job_id,
+                                job["attempt_id"],
+                                job["lease_token"],
+                                "facets_missing",
+                                "Missing entity_types or domains",
+                                gen_res.done_reason,
+                            )
+                            return False
+
+            else:
+                valid_event_ids = set(unit.event_ids)
+                invalid_evidence = False
+                for concept in output.concepts:
+                    for eid in concept.evidence_event_ids:
+                        if eid not in valid_event_ids:
+                            invalid_evidence = True
+                            break
+                for rel in output.relations:
+                    for eid in rel.evidence_event_ids:
+                        if eid not in valid_event_ids:
+                            invalid_evidence = True
+                            break
+
+                if invalid_evidence:
+                    self.store.fail_job(
+                        job_id,
+                        job["attempt_id"],
+                        job["lease_token"],
+                        "validation_error",
+                        "Output contained evidence_event_ids not present in the unit",
+                        gen_res.done_reason,
+                    )
+                    return False
 
             elapsed_ms = gen_res.elapsed_ms
             output_json = output.model_dump_json()
@@ -139,39 +215,27 @@ class Worker:
                 gen_res.completion_tokens,
             )
 
-            # Update vocabulary registry
+            # Update vocabulary registry (Needs update for V3)
             try:
                 from scripts.semantic_tagger.vocabulary_store import VocabularyStore
 
-                vocab = VocabularyStore()
-                for concept in output.concepts:
-                    lang = concept.language if concept.language else "sv"
-                    for facet in concept.entity_types:
-                        vocab.upsert_concept("entity_type", facet.label, facet.confidence, lang)
-                    for facet in concept.domains:
-                        vocab.upsert_concept("domain", facet.label, facet.confidence, lang)
-                    for facet in concept.context_roles:
-                        vocab.upsert_concept("context_role", facet.label, facet.confidence, lang)
-                for rel in output.relations:
-                    vocab.upsert_concept(
-                        "relation_predicate", rel.predicate, rel.confidence, "en"
-                    )  # predicates are snake_case english
+                vocab_store = VocabularyStore()
+                vocab_store.update_from_tagger_output(output, unit.unit_id, job["run_id"], job_id)
             except Exception as e:
-                logger.warning(f"Failed to upsert vocabulary candidates for job {job_id}: {e}")
+                logger.error(f"Failed to update vocabulary: {e}")
 
             return True
 
         except OllamaError as e:
-            error_msg = str(e)
-            logger.error(f"Job {job_id} failed on attempt {attempt}: {error_msg}")
             self.store.fail_job(
-                job_id, job["attempt_id"], job["lease_token"], "ollama_error", error_msg[:200]
+                job_id, job["attempt_id"], job["lease_token"], "ollama_error", str(e), None
             )
             return False
         except Exception as e:
-            error_msg = str(e)
-            logger.exception(f"Job {job_id} failed unexpectedly on attempt {attempt}: {error_msg}")
+            logger.error(f"Worker exception: {e}")
+            import traceback
+
+            traceback.print_exc()
             self.store.fail_job(
-                job_id, job["attempt_id"], job["lease_token"], "system_error", error_msg[:200]
+                job_id, job["attempt_id"], job["lease_token"], "worker_exception", str(e), None
             )
-            return False

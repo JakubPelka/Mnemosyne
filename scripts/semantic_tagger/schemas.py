@@ -1,5 +1,6 @@
+import re
 from typing import List, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator, field_validator
 
 ConceptType = Literal[
     "project",
@@ -128,3 +129,86 @@ class ConversationConsolidationOutput(BaseModel):
     content_types: List[ContentType]
     conversation_languages: List[str]
     project_candidates: List[ProjectCandidate]
+
+
+def _validate_snake_case_list(v):
+    for item in v:
+        if not re.match(r"^[a-z][a-z0-9_]*$", item):
+            raise ValueError(f"'{item}' must be English ASCII snake_case")
+    return v
+
+
+class SemanticConceptV3(BaseModel):
+    concept_id: str = Field(pattern=r"^C[1-8]$")
+    surface_label: str
+    preferred_label: str
+    language: str
+    entity_types: List[str] = Field(default_factory=list, min_length=1, max_length=3)
+    domains: List[str] = Field(default_factory=list, min_length=1, max_length=5)
+    context_roles: List[str] = Field(default_factory=list, max_length=3)
+    importance: float = Field(ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence: List[str] = Field(default_factory=list)
+
+    @field_validator("entity_types", "domains", "context_roles")
+    @classmethod
+    def validate_snake_case(cls, v):
+        return _validate_snake_case_list(v)
+
+
+class SemanticRelationV3(BaseModel):
+    subject_concept_id: str = Field(pattern=r"^C[1-8]$")
+    predicate: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    object_concept_id: str = Field(pattern=r"^C[1-8]$")
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence: List[str] = Field(default_factory=list)
+
+
+class TaggerOutputV3(BaseModel):
+    schema_version: Literal["semantic-tags-v3"] = "semantic-tags-v3"
+    languages: List[str] = Field(description="Zidentyfikowane jezyki")
+    content_types: List[str]
+    unit_quality: Literal["meaningful", "junk"]
+    concepts: List[SemanticConceptV3] = Field(default_factory=list, max_length=8)
+    relations: List[SemanticRelationV3] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def validate_unit_quality(self):
+        if self.unit_quality == "meaningful":
+            if not self.concepts:
+                raise ValueError("meaningful unit must have at least one concept")
+            # The min_length=1 on entity_types/domains already ensures each concept has them.
+        elif self.unit_quality == "junk":
+            if self.concepts or self.relations:
+                raise ValueError("junk unit must have empty concepts and relations")
+
+        # Validate unique Concept IDs
+        concept_ids = [c.concept_id for c in self.concepts]
+        if len(concept_ids) != len(set(concept_ids)):
+            raise ValueError("Concept IDs must be unique")
+
+        # Validate relation endpoints
+        for r in self.relations:
+            if r.subject_concept_id not in concept_ids:
+                raise ValueError(f"Relation subject {r.subject_concept_id} not found in concepts")
+            if r.object_concept_id not in concept_ids:
+                raise ValueError(f"Relation object {r.object_concept_id} not found in concepts")
+
+        # Validate relation duplicates
+        rel_signatures = [
+            (r.subject_concept_id, r.predicate, r.object_concept_id) for r in self.relations
+        ]
+        if len(rel_signatures) != len(set(rel_signatures)):
+            raise ValueError("Duplicate relations found")
+
+        # Validate evidence alias format
+        for c in self.concepts:
+            for e in c.evidence:
+                if not re.match(r"^E[1-9][0-9]*$", e):
+                    raise ValueError(f"Invalid evidence alias format: {e}")
+        for r in self.relations:
+            for e in r.evidence:
+                if not re.match(r"^E[1-9][0-9]*$", e):
+                    raise ValueError(f"Invalid evidence alias format: {e}")
+
+        return self

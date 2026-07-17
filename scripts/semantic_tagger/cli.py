@@ -120,14 +120,18 @@ def cmd_prepare_rerun(args):
 
     with open(manifest) as f:
         manifest_entries = json.load(f)
-        
+
     unique_contexts = {entry["context_id"] for entry in manifest_entries if "context_id" in entry}
-    
+
     if len(manifest_entries) != args.expected_units:
-        raise ValueError(f"Expected {args.expected_units} units, but manifest has {len(manifest_entries)}")
-        
+        raise ValueError(
+            f"Expected {args.expected_units} units, but manifest has {len(manifest_entries)}"
+        )
+
     if len(unique_contexts) != args.expected_contexts:
-        raise ValueError(f"Expected {args.expected_contexts} unique contexts, but manifest has {len(unique_contexts)}")
+        raise ValueError(
+            f"Expected {args.expected_contexts} unique contexts, but manifest has {len(unique_contexts)}"
+        )
 
     store = JobStore(target_sidecar)
 
@@ -822,11 +826,21 @@ def main():
     parser_worker.add_argument("--run-id", type=str, required=True, help="Run ID to bind to")
     parser_worker.add_argument("--db-path", type=str, help="Custom db path")
 
-    subparsers.add_parser("pause")
-    subparsers.add_parser("resume")
-    subparsers.add_parser("stop-after-current")
+    parser_pause = subparsers.add_parser("pause")
+    parser_pause.add_argument("--db-path", default="data/semantic_tagger.local.sqlite3")
+    parser_pause.add_argument("--run-id", required=True)
+
+    parser_resume = subparsers.add_parser("resume")
+    parser_resume.add_argument("--db-path", default="data/semantic_tagger.local.sqlite3")
+    parser_resume.add_argument("--run-id", required=True)
+
+    parser_stop = subparsers.add_parser("stop-after-current")
+    parser_stop.add_argument("--db-path", default="data/semantic_tagger.local.sqlite3")
+    parser_stop.add_argument("--run-id", required=True)
 
     parser_status = subparsers.add_parser("status")
+    parser_status.add_argument("--db-path", default="data/semantic_tagger.local.sqlite3")
+    parser_status.add_argument("--run-id", required=True)
     parser_status.add_argument(
         "--watch", type=int, help="Refresh interval in seconds", nargs="?", const=5, default=0
     )
@@ -840,8 +854,16 @@ def main():
     subparsers.add_parser("consolidate")
 
     parser_corpus_stats = subparsers.add_parser("corpus-stats")
-    parser_corpus_stats.add_argument("--timing-db", default="data/semantic_tagger_v2_rerun.sqlite3", help="Sidecar DB for timing stats")
-    parser_corpus_stats.add_argument("--estimate-source", default="semantic_tags_v2_small_sample", help="Name of the estimate source")
+    parser_corpus_stats.add_argument(
+        "--timing-db",
+        default="data/semantic_tagger_v2_rerun.sqlite3",
+        help="Sidecar DB for timing stats",
+    )
+    parser_corpus_stats.add_argument(
+        "--estimate-source",
+        default="semantic_tags_v2_small_sample",
+        help="Name of the estimate source",
+    )
 
     parser_vocab = subparsers.add_parser("vocabulary-candidates")
     parser_vocab.add_argument("--min-occurrences", type=int, default=1)
@@ -860,6 +882,12 @@ def main():
     parser_export.add_argument("--audit-db-sha256", help="Legacy alias for --source-sha256")
     parser_export.add_argument("--audit-db-snapshot-date", help="Date of the snapshot")
 
+    parser_compare = subparsers.add_parser("compare")
+    parser_compare.add_argument("--v1-db", required=True)
+    parser_compare.add_argument("--v3-db", required=True)
+    parser_compare.add_argument("--provenance-json", required=True)
+    parser_compare.add_argument("--output-md", required=True)
+
     args = parser.parse_args()
 
     if args.command == "corpus-stats":
@@ -874,6 +902,161 @@ def main():
         cmd_prepare_rerun(args)
     elif args.command == "prepare":
         cmd_prepare(args)
+
+    if args.command == "pause":
+        from scripts.semantic_tagger.job_store import JobStore
+        from pathlib import Path
+
+        store = JobStore(Path(args.db_path))
+        store.set_run_status(args.run_id, "paused")
+        print(f"Run {args.run_id} paused.")
+        return
+
+    if args.command == "resume":
+        from scripts.semantic_tagger.job_store import JobStore
+        from pathlib import Path
+
+        store = JobStore(Path(args.db_path))
+        store.set_run_status(args.run_id, "active")
+        print(f"Run {args.run_id} resumed.")
+        return
+
+    if args.command == "stop-after-current":
+        from scripts.semantic_tagger.job_store import JobStore
+        from pathlib import Path
+
+        store = JobStore(Path(args.db_path))
+        store.set_run_status(args.run_id, "stop_after_current")
+        print(f"Run {args.run_id} scheduled to stop after current job.")
+        return
+
+    if args.command == "status":
+        from scripts.semantic_tagger.job_store import JobStore
+        from pathlib import Path
+
+        store = JobStore(Path(args.db_path))
+        status = store.get_run_status(args.run_id)
+        print(f"Run {args.run_id} status: {status}")
+        return
+
+    if args.command == "compare":
+        import sqlite3
+        import json
+        import unicodedata
+
+        def normalize_label(label: str) -> str:
+            if not label:
+                return ""
+            return unicodedata.normalize("NFKC", label).strip().casefold()
+
+        def extract_label(c: dict) -> str:
+            for k in ["surface_label", "label", "canonical_label", "preferred_label", "name"]:
+                if k in c and c[k]:
+                    return c[k]
+            return ""
+
+        with open(args.provenance_json) as f:
+            audit_data = json.load(f)
+
+        v3_to_v1_map = {u["v2_unit_id"]: u["old_unit_id"] for u in audit_data["units"]}
+
+        v3_conn = sqlite3.connect(f"file:{args.v3_db}?mode=ro", uri=True)
+        v3_conn.row_factory = sqlite3.Row
+        v1_conn = sqlite3.connect(f"file:{args.v1_db}?mode=ro", uri=True)
+        v1_conn.row_factory = sqlite3.Row
+
+        done_jobs = v3_conn.execute("SELECT * FROM tagging_job WHERE status='done'").fetchall()
+
+        comparison_lines = ["# Semantic Tagger V1 vs V3 Comparison\n"]
+
+        for job in done_jobs:
+            v3_uid = job["unit_id"]
+            old_uid = v3_to_v1_map.get(v3_uid)
+            if not old_uid:
+                continue
+
+            old_job = v1_conn.execute(
+                "SELECT * FROM tagging_job WHERE unit_id=? AND status='done'", (old_uid,)
+            ).fetchone()
+            if not old_job:
+                continue
+
+            try:
+                v3_out = json.loads(job["output_json"])
+            except Exception:
+                v3_out = {}
+            try:
+                old_out = json.loads(old_job["output_json"])
+            except Exception:
+                old_out = {}
+
+            v3_concepts_raw = {extract_label(c): c for c in v3_out.get("concepts", [])}
+            v1_concepts_raw = {extract_label(c): c for c in old_out.get("concepts", [])}
+
+            v3_norm_map = {normalize_label(k): k for k in v3_concepts_raw.keys()}
+            v1_norm_map = {normalize_label(k): k for k in v1_concepts_raw.keys()}
+
+            v3_set = set(v3_norm_map.keys())
+            v1_set = set(v1_norm_map.keys())
+
+            kept = v3_set.intersection(v1_set)
+            added = v3_set - v1_set
+            removed = v1_set - v3_set
+
+            kept_disp = [v3_norm_map[k] for k in kept]
+            added_disp = [v3_norm_map[k] for k in added]
+            removed_disp = [v1_norm_map[k] for k in removed]
+
+            v3_types = []
+            v3_domains = []
+            v3_roles = []
+            for c in v3_out.get("concepts", []):
+                v3_types.extend(c.get("entity_types", []))
+                v3_domains.extend(c.get("domains", []))
+                v3_roles.extend(c.get("context_roles", []))
+
+            v3_relations = []
+            for r in v3_out.get("relations", []):
+                s_id = r.get("subject_concept_id")
+                o_id = r.get("object_concept_id")
+                s_label = next(
+                    (
+                        extract_label(c)
+                        for c in v3_out.get("concepts", [])
+                        if c.get("concept_id") == s_id
+                    ),
+                    s_id,
+                )
+                o_label = next(
+                    (
+                        extract_label(c)
+                        for c in v3_out.get("concepts", [])
+                        if c.get("concept_id") == o_id
+                    ),
+                    o_id,
+                )
+                v3_relations.append(
+                    f"{s_label} ({s_id}) -> {r.get('predicate')} -> {o_label} ({o_id})"
+                )
+
+            comparison_lines.append(f"## Unit: {v3_uid}")
+            comparison_lines.append(f"**V1 Concepts**: {', '.join(v1_concepts_raw.keys())}")
+            comparison_lines.append(f"**V3 Concepts**: {', '.join(v3_concepts_raw.keys())}")
+            comparison_lines.append(f"**Kept**: {', '.join(kept_disp)}")
+            comparison_lines.append(f"**Added**: {', '.join(added_disp)}")
+            comparison_lines.append(f"**Removed**: {', '.join(removed_disp)}")
+            comparison_lines.append(f"**V3 Entity Types**: {', '.join(set(v3_types))}")
+            comparison_lines.append(f"**V3 Domains**: {', '.join(set(v3_domains))}")
+            comparison_lines.append(f"**V3 Context Roles**: {', '.join(set(v3_roles))}")
+            comparison_lines.append(f"**V3 Relations**: {', '.join(v3_relations)}")
+            comparison_lines.append(f"**Time V1**: {old_job['elapsed_ms']} ms")
+            comparison_lines.append(f"**Time V3**: {job['elapsed_ms']} ms")
+            comparison_lines.append("\n")
+
+        with open(args.output_md, "w") as f:
+            f.writelines([line + "\n" for line in comparison_lines])
+        print(f"Comparison written to {args.output_md}")
+        return
     elif args.command == "worker":
         cmd_worker(args)
     elif args.command == "pause":

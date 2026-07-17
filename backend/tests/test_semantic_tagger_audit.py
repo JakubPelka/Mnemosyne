@@ -518,6 +518,7 @@ def test_stale_worker_cannot_complete_after_takeover(tmp_path):
     job = store.claim_next_job(run_id, "worker1", lease_seconds=-10)
 
     # Recover the job via periodic cleanup logic inside claim_next_job (which should reclaim expired ones)
+    store.recover_expired_leases(run_id)
     job2 = store.claim_next_job(run_id, "worker2")
     assert job2["attempt_id"] != job["attempt_id"]
 
@@ -547,7 +548,7 @@ def test_heartbeat_uses_configured_sidecar(tmp_path):
 
     from scripts.semantic_tagger.worker_loop import HeartbeatThread
 
-    heartbeat = HeartbeatThread(str(store.db_path), run_id, "w1")
+    heartbeat = HeartbeatThread(store, run_id, "w1")
 
     # Run a single loop using mock
     with mock.patch("time.sleep", side_effect=InterruptedError):
@@ -606,6 +607,7 @@ def test_worker_passes_generation_settings_to_client(tmp_path):
     mock_out = mock.MagicMock()
     mock_out.model_dump_json.return_value = "{}"
     from scripts.semantic_tagger.ollama_client import OllamaGenerationResult
+
     client.generate_tags.return_value = OllamaGenerationResult("{}", 10, 10, 100, "stop")
     worker = Worker(store, client)
     store.complete_job = mock.MagicMock()
@@ -631,9 +633,9 @@ def test_worker_passes_generation_settings_to_client(tmp_path):
 
     client.generate_tags.assert_called_once()
     args, kwargs = client.generate_tags.call_args
-    assert kwargs['num_predict'] == 1024  # num_predict
-    assert kwargs['seed'] == 99  # seed
-    assert kwargs['num_ctx'] == 8192
+    assert kwargs["num_predict"] == 1024  # num_predict
+    assert kwargs["seed"] == 99  # seed
+    assert kwargs["num_ctx"] == 8192
 
 
 def test_ollama_payload_contains_num_predict_and_seed():
@@ -726,10 +728,11 @@ def test_truncated_response_is_failed_as_output_truncated(tmp_path):
     client = mock.MagicMock()
     # return done_reason="length"
     from scripts.semantic_tagger.ollama_client import OllamaGenerationResult
+
     client.generate_tags.return_value = OllamaGenerationResult("{}", 10, 4096, 100, "length")
     worker = Worker(store, client)
     store.complete_job = mock.MagicMock()
-    
+
     store.record_attempt_response_metadata = mock.MagicMock()
 
     unit = mock.MagicMock()

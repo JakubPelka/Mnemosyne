@@ -35,6 +35,7 @@ def test_job_resume_and_skip(tmp_path):
     # 3. Job 3 remains pending untouched
 
     # NOW: Restart worker (fetching pending jobs again)
+    store.recover_expired_leases(run_id)
     new_pending = store.get_pending_jobs(run_id, 10)
 
     # Done jobs should be skipped
@@ -52,7 +53,9 @@ def test_job_resume_and_skip(tmp_path):
     import sqlite3
 
     with sqlite3.connect(store.db_path) as conn:
-        attempts = conn.execute("SELECT * FROM tagging_attempt WHERE status = 'running'").fetchall()
+        attempts = conn.execute(
+            "SELECT * FROM tagging_attempt WHERE status = 'interrupted'"
+        ).fetchall()
         # The history of the expired attempt should still exist!
         assert len(attempts) > 0, "History of expired attempts must remain in tagging_attempt"
 

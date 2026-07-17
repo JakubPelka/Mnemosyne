@@ -1,10 +1,9 @@
 import json
 import urllib.request
 import urllib.error
-from typing import Dict, Any, Tuple
-from pydantic import ValidationError
-from scripts.semantic_tagger.schemas import TaggerOutput
+from typing import Dict, Any
 from dataclasses import dataclass
+
 
 @dataclass
 class OllamaGenerationResult:
@@ -45,14 +44,24 @@ class OllamaClient:
             return "unknown"
 
     def generate_tags(
-        self, prompt: str, schema_json: dict, num_predict: int = 4096, seed: int = 42, num_ctx: int = 8192
+        self,
+        prompt: str,
+        schema_json: dict,
+        num_predict: int = 4096,
+        seed: int = 42,
+        num_ctx: int = 8192,
     ) -> OllamaGenerationResult:
         payload = {
             "model": self.model,
             "prompt": prompt,
             "stream": False,
             "format": schema_json,
-            "options": {"temperature": 0.0, "num_predict": num_predict, "seed": seed, "num_ctx": num_ctx},
+            "options": {
+                "temperature": 0.0,
+                "num_predict": num_predict,
+                "seed": seed,
+                "num_ctx": num_ctx,
+            },
         }
 
         req = urllib.request.Request(
@@ -81,7 +90,7 @@ class OllamaClient:
                     prompt_tokens=prompt_tokens,
                     completion_tokens=completion_tokens,
                     elapsed_ms=elapsed_ms,
-                    done_reason=done_reason
+                    done_reason=done_reason,
                 )
 
         except urllib.error.URLError as e:
