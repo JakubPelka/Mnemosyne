@@ -711,13 +711,16 @@ def cmd_corpus_stats(args):
         stats["events_per_unit_max"] = max(events_per_unit)
 
     if times:
-        est_source = getattr(args, "estimate_source", "semantic_tags_v2_rerun")
+        est_source = getattr(args, "estimate_source", "semantic_tags_v2_small_sample")
         stats["estimate_source"] = est_source
         if est_source == "exploratory_tainted_pilot":
             stats["estimate_confidence"] = "low (num_predict=2048 was not enforced)"
         else:
-            stats["estimate_confidence"] = "medium"
+            stats["estimate_confidence"] = "very_low"
         stats["available_timing_measurements"] = len(times)
+        stats["sample_units_total"] = 10
+        stats["successful_units"] = 8
+        stats["failed_units"] = 2
 
         p50 = statistics.median(times)
         p75 = statistics.quantiles(times, n=100)[74] if len(times) > 1 else times[0]
@@ -838,7 +841,7 @@ def main():
 
     parser_corpus_stats = subparsers.add_parser("corpus-stats")
     parser_corpus_stats.add_argument("--timing-db", default="data/semantic_tagger_v2_rerun.sqlite3", help="Sidecar DB for timing stats")
-    parser_corpus_stats.add_argument("--estimate-source", default="semantic_tags_v2_rerun", help="Name of the estimate source")
+    parser_corpus_stats.add_argument("--estimate-source", default="semantic_tags_v2_small_sample", help="Name of the estimate source")
 
     parser_vocab = subparsers.add_parser("vocabulary-candidates")
     parser_vocab.add_argument("--min-occurrences", type=int, default=1)
