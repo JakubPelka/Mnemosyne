@@ -203,6 +203,206 @@ def cmd_prepare_rerun(args):
     print(f"run_id = {run_id}")
 
 
+def cmd_prepare_evaluation(args):
+    import json
+    import sqlite3
+    import hashlib
+    from pathlib import Path
+    from scripts.semantic_tagger.job_store import JobStore
+    from scripts.semantic_tagger.unit_builder import UnitBuilder
+    from scripts.semantic_tagger.content_loader import load_and_reconstruct_unit
+
+    source_sidecar = Path(args.source_sidecar)
+    manifest = Path(args.manifest)
+    target_sidecar = Path(args.target_sidecar)
+
+    if target_sidecar.exists():
+        print(f"Target sidecar {target_sidecar} already exists. Refusing to overwrite.")
+        return
+
+    with open(manifest) as f:
+        manifest_entries = json.load(f)
+
+    unique_contexts = {entry["context_id"] for entry in manifest_entries if "context_id" in entry}
+
+    if len(manifest_entries) != args.expected_units:
+        raise ValueError(
+            f"Expected {args.expected_units} units, but manifest has {len(manifest_entries)}"
+        )
+
+    if len(unique_contexts) != args.expected_contexts:
+        raise ValueError(
+            f"Expected {args.expected_contexts} unique contexts, but manifest has {len(unique_contexts)}"
+        )
+
+    # 1. Read source tagging_run
+    with sqlite3.connect(source_sidecar) as conn:
+        conn.row_factory = sqlite3.Row
+        query = "SELECT run_id, schema_version, unit_strategy_version FROM tagging_run ORDER BY created_at DESC LIMIT 1"
+        if args.source_run_id:
+            query = f"SELECT run_id, schema_version, unit_strategy_version FROM tagging_run WHERE run_id = '{args.source_run_id}'"
+        source_run_row = conn.execute(query).fetchone()
+        if not source_run_row:
+            print("Could not find source tagging_run.")
+            return
+
+        source_schema_version = source_run_row["schema_version"]
+        source_unit_strategy_version = source_run_row["unit_strategy_version"]
+        source_run_id = source_run_row["run_id"]
+
+    # 2. Reconstruct and verify source
+    verified_source_units = []
+
+    with get_main_db() as main_conn:
+        main_conn.row_factory = sqlite3.Row
+
+        for entry in manifest_entries:
+            old_unit_id = entry["unit_id"]
+
+            reconstructed_old = load_and_reconstruct_unit(
+                old_unit_id,
+                str(source_sidecar),
+                source_schema_version,
+                source_unit_strategy_version,
+            )
+
+            if reconstructed_old.content_hash != entry["content_hash"]:
+                print(
+                    f"Source content hash verification failed for {old_unit_id}. "
+                    f"Expected {entry['content_hash']}, got {reconstructed_old.content_hash}"
+                )
+                return
+
+            verified_source_units.append(
+                {
+                    "manifest_entry": entry,
+                    "reconstructed_old": reconstructed_old,
+                    "old_unit_id": old_unit_id,
+                }
+            )
+
+    # 3. Create target units and jobs
+    store = JobStore(target_sidecar)
+
+    settings = {
+        "think": args.think,
+        "stream": args.stream,
+        "temperature": args.temperature,
+        "seed": args.seed,
+        "num_predict": args.num_predict,
+        "num_ctx": args.num_ctx,
+        "request_timeout_seconds": getattr(args, "request_timeout_seconds", 3600),
+    }
+
+    run_info = {
+        "model_name": args.model,
+        "prompt_version": args.target_prompt_version,
+        "schema_version": args.target_schema_version,
+        "unit_strategy_version": args.target_unit_strategy_version,
+        "settings": settings,
+    }
+
+    target_run_id = store.create_run(run_info)
+
+    # 4. Lineage table creation
+    with sqlite3.connect(store.db_path) as target_conn:
+        target_conn.execute("""
+            CREATE TABLE IF NOT EXISTS tagging_unit_lineage (
+                source_sidecar_sha256 TEXT,
+                source_run_id TEXT,
+                source_unit_id TEXT,
+                source_content_hash TEXT,
+                source_schema_version TEXT,
+                source_unit_strategy_version TEXT,
+                target_unit_id TEXT,
+                target_content_hash TEXT,
+                target_schema_version TEXT,
+                target_unit_strategy_version TEXT
+            )
+        """)
+
+    source_sha256 = hashlib.sha256(source_sidecar.read_bytes()).hexdigest()
+
+    with get_main_db() as conn:
+        conn.row_factory = sqlite3.Row
+        target_builder = UnitBuilder(
+            schema_version=args.target_schema_version,
+            strategy_version=args.target_unit_strategy_version,
+        )
+
+        with sqlite3.connect(store.db_path) as target_conn:
+            for item in verified_source_units:
+                old_unit_id = item["old_unit_id"]
+                reconstructed_old = item["reconstructed_old"]
+                entry = item["manifest_entry"]
+
+                ctx_id = entry["context_id"]
+                events_rows = conn.execute(
+                    "SELECT event_id, title, text, timestamp_start, event_type FROM events WHERE context_id = ? ORDER BY timestamp_start ASC",
+                    (ctx_id,),
+                ).fetchall()
+                events = [dict(r) for r in events_rows]
+                title = next((e["title"] for e in events if e.get("title")), "")
+
+                units = target_builder.build_units_for_context(ctx_id, events, title)
+                matching = [u for u in units if u["event_ids"] == list(reconstructed_old.event_ids)]
+                if not matching:
+                    print(
+                        f"Could not find matching event set for {old_unit_id} in target reconstruction."
+                    )
+                    return
+                new_u = matching[0]
+
+                store.save_unit(new_u)
+
+                gen_config_str = json.dumps(settings, sort_keys=True)
+                generation_config_hash = hashlib.sha256(gen_config_str.encode()).hexdigest()
+
+                job_key_raw = f"{new_u['unit_id']}|{new_u['content_hash']}|{args.model}|<digest>|{args.target_prompt_version}|{args.target_schema_version}|{args.target_unit_strategy_version}|{generation_config_hash}"
+                job_key = hashlib.sha256(job_key_raw.encode()).hexdigest()
+                store.queue_job(job_key, target_run_id, new_u["unit_id"], new_u["content_hash"])
+
+                # Insert lineage
+                target_conn.execute(
+                    """
+                    INSERT INTO tagging_unit_lineage (
+                        source_sidecar_sha256, source_run_id, source_unit_id, source_content_hash,
+                        source_schema_version, source_unit_strategy_version,
+                        target_unit_id, target_content_hash, target_schema_version, target_unit_strategy_version
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        source_sha256,
+                        source_run_id,
+                        old_unit_id,
+                        entry["content_hash"],
+                        source_schema_version,
+                        source_unit_strategy_version,
+                        new_u["unit_id"],
+                        new_u["content_hash"],
+                        args.target_schema_version,
+                        args.target_unit_strategy_version,
+                    ),
+                )
+
+    print(f"source hash = {source_sha256}")
+    print(f"source schema = {source_schema_version}")
+    print("verified source content hash = success")
+    print(f"target schema = {args.target_schema_version}")
+    
+    with sqlite3.connect(store.db_path) as target_conn:
+        target_conn.row_factory = sqlite3.Row
+        unit_rows = target_conn.execute("SELECT content_hash FROM tagging_unit").fetchall()
+        for u in unit_rows:
+            print(f"target content hash = {u['content_hash']}")
+            
+    print(f"units = {len(manifest_entries)}")
+    print(f"jobs_pending = {len(manifest_entries)}")
+    print("attempts = 0")
+    print(f"run_id = {target_run_id}")
+    print(f"sidecar = {args.target_sidecar}")
+
+
 def cmd_prepare(args):
     print(f"Preparing sample: {args.sample}, limit: {args.limit_contexts}")
     store = JobStore()
@@ -795,6 +995,28 @@ def main():
     parser_prepare_rerun.add_argument("--expected-units", type=int, required=True)
     parser_prepare_rerun.add_argument("--expected-contexts", type=int, required=True)
 
+    parser_prepare_evaluation = subparsers.add_parser("prepare-evaluation")
+    parser_prepare_evaluation.add_argument("--source-sidecar", required=True)
+    parser_prepare_evaluation.add_argument("--source-run-id", required=False)
+    parser_prepare_evaluation.add_argument("--manifest", required=True)
+    parser_prepare_evaluation.add_argument("--target-sidecar", required=True)
+    parser_prepare_evaluation.add_argument("--model", required=True)
+    parser_prepare_evaluation.add_argument("--target-schema-version", required=True)
+    parser_prepare_evaluation.add_argument("--target-prompt-version", required=True)
+    parser_prepare_evaluation.add_argument("--target-unit-strategy-version", required=True)
+    parser_prepare_evaluation.add_argument(
+        "--think", type=lambda x: str(x).lower() == "true", default=False
+    )
+    parser_prepare_evaluation.add_argument(
+        "--stream", type=lambda x: str(x).lower() == "true", default=False
+    )
+    parser_prepare_evaluation.add_argument("--temperature", type=float, default=0.0)
+    parser_prepare_evaluation.add_argument("--seed", type=int, default=42)
+    parser_prepare_evaluation.add_argument("--num-predict", type=int, default=4096)
+    parser_prepare_evaluation.add_argument("--num-ctx", type=int, default=8192)
+    parser_prepare_evaluation.add_argument("--expected-units", type=int, required=True)
+    parser_prepare_evaluation.add_argument("--expected-contexts", type=int, required=True)
+
     parser_prep = subparsers.add_parser("prepare")
     parser_prep.add_argument("--sample", required=True)
     parser_prep.add_argument("--limit-contexts", type=int, default=12)
@@ -900,6 +1122,8 @@ def main():
         cmd_reset_sidecar(args)
     elif args.command == "prepare-rerun":
         cmd_prepare_rerun(args)
+    elif args.command == "prepare-evaluation":
+        cmd_prepare_evaluation(args)
     elif args.command == "prepare":
         cmd_prepare(args)
 
