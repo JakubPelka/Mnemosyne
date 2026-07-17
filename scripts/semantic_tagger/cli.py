@@ -630,6 +630,9 @@ def cmd_export_review(args):
 
 def cmd_corpus_stats(args):
     import statistics
+    from pathlib import Path
+    import json
+    import sqlite3
 
     print("Computing corpus stats (this may take a moment)...")
     main_db_uri = "file:data/mnemosyne.sqlite3?mode=ro"
@@ -670,10 +673,10 @@ def cmd_corpus_stats(args):
                     all_chars.append(u["character_count"])
                     events_per_unit.append(u["event_count"])
 
-    old_sidecar = "file:data/semantic_tagger_exports/semantic_tagger_exploratory_tainted_20260716_110549.sqlite3?mode=ro"
+    sidecar_db = getattr(args, "timing_db", "data/semantic_tagger_v2_rerun.sqlite3")
     times = []
     try:
-        with sqlite3.connect(old_sidecar, uri=True) as conn:
+        with sqlite3.connect(f"file:{sidecar_db}?mode=ro", uri=True) as conn:
             rows = conn.execute(
                 "SELECT elapsed_ms FROM tagging_job WHERE status='done' AND elapsed_ms IS NOT NULL"
             ).fetchall()
@@ -708,8 +711,12 @@ def cmd_corpus_stats(args):
         stats["events_per_unit_max"] = max(events_per_unit)
 
     if times:
-        stats["estimate_source"] = "exploratory_tainted_pilot"
-        stats["estimate_confidence"] = "low (num_predict=2048 was not enforced)"
+        est_source = getattr(args, "estimate_source", "semantic_tags_v2_rerun")
+        stats["estimate_source"] = est_source
+        if est_source == "exploratory_tainted_pilot":
+            stats["estimate_confidence"] = "low (num_predict=2048 was not enforced)"
+        else:
+            stats["estimate_confidence"] = "medium"
         stats["available_timing_measurements"] = len(times)
 
         p50 = statistics.median(times)
@@ -829,7 +836,9 @@ def main():
 
     subparsers.add_parser("consolidate")
 
-    subparsers.add_parser("corpus-stats")
+    parser_corpus_stats = subparsers.add_parser("corpus-stats")
+    parser_corpus_stats.add_argument("--timing-db", default="data/semantic_tagger_v2_rerun.sqlite3", help="Sidecar DB for timing stats")
+    parser_corpus_stats.add_argument("--estimate-source", default="semantic_tags_v2_rerun", help="Name of the estimate source")
 
     parser_vocab = subparsers.add_parser("vocabulary-candidates")
     parser_vocab.add_argument("--min-occurrences", type=int, default=1)
