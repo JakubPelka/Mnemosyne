@@ -266,7 +266,7 @@ class VocabularyStore:
             import hashlib
             import json
 
-            ev_sorted = sorted(r.evidence)
+            ev_sorted = sorted(r.evidence_event_ids)
             sig = f"{unit_id}:{r.subject_concept_id}:{r.predicate}:{r.object_concept_id}:{json.dumps(ev_sorted)}"
             rel_id = hashlib.sha256(sig.encode()).hexdigest()
             self.upsert_occurrence_v3(
