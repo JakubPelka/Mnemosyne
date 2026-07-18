@@ -38,7 +38,7 @@ class Worker:
 
             if attempt == 2:
                 if job.get("retry_reason") == "facets_missing":
-                    prompt += "\n\nThe previous response omitted required facets.\nReturn fewer concepts if necessary.\nEvery concept must contain at least one entity_type and one domain."
+                    prompt += "\n\nThe previous response omitted required facets.\nReturn fewer concepts if necessary rather than inventing generic facets.\nEvery concept must contain 1 to 3 entity_types and 1 to 5 domains.\nEmpty arrays [] are strictly invalid for these fields."
                 else:
                     prompt += "\n\nOstatnia próba zakończyła się błędem schematu. Zwróć tylko 100% poprawne dane, używając poprawnego JSON."
             elif attempt == 3:
@@ -89,6 +89,7 @@ class Worker:
                 gen_res.prompt_tokens,
                 gen_res.completion_tokens,
                 gen_res.done_reason,
+                raw_response_text=gen_res.output_text,
             )
 
             if gen_res.done_reason == "length" or gen_res.completion_tokens >= num_predict:
@@ -116,14 +117,41 @@ class Worker:
                 )
                 return False
             except ValidationError as e:
-                self.store.fail_job(
-                    job_id,
-                    job["attempt_id"],
-                    job["lease_token"],
-                    "validation_error",
-                    f"Schema validation failed: {e}",
-                    gen_res.done_reason,
-                )
+                is_facets_missing = False
+                if e.errors():
+                    is_facets_missing = True
+                    for err in e.errors():
+                        loc = err.get("loc", ())
+                        type_ = err.get("type", "")
+                        if (
+                            len(loc) >= 3
+                            and loc[0] == "concepts"
+                            and loc[2] in ("entity_types", "domains")
+                        ):
+                            if type_ in ("missing", "too_short", "value_error.list.min_items"):
+                                continue
+                        is_facets_missing = False
+                        break
+
+                if is_facets_missing:
+                    self.store.fail_job(
+                        job_id,
+                        job["attempt_id"],
+                        job["lease_token"],
+                        "facets_missing",
+                        f"Missing required facets: {e}",
+                        gen_res.done_reason,
+                        retry_reason="facets_missing" if attempt < 2 else None,
+                    )
+                else:
+                    self.store.fail_job(
+                        job_id,
+                        job["attempt_id"],
+                        job["lease_token"],
+                        "validation_error",
+                        f"Schema validation failed: {e}",
+                        gen_res.done_reason,
+                    )
                 return False
 
             if schema_version == "semantic-tags-v3":

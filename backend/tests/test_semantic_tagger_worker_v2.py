@@ -30,7 +30,15 @@ class DummyStore(JobStore):
         self.completed_jobs.append((job_id, output_json, p_tok, c_tok))
 
     def record_attempt_response_metadata(
-        self, attempt_id, job_id, lease_token, elapsed_ms, p_tok, c_tok, done_reason
+        self,
+        attempt_id,
+        job_id,
+        lease_token,
+        elapsed_ms,
+        p_tok,
+        c_tok,
+        done_reason,
+        raw_response_text=None,
     ):
         self.metadata.append(
             (attempt_id, job_id, lease_token, elapsed_ms, p_tok, c_tok, done_reason)

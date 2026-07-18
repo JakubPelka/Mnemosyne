@@ -20,14 +20,15 @@ class JobExecutionContext:
 
 
 DB_PATH = Path("data/semantic_tagger.local.sqlite3")
-EXPECTED_SCHEMA_VERSION = 3
+SIDECAR_DB_SCHEMA_VERSION = 4
+MAX_STORED_RESPONSE_BYTES = 1_048_576
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sidecar_meta (
     key TEXT PRIMARY KEY,
     value TEXT
 );
-INSERT OR IGNORE INTO sidecar_meta (key, value) VALUES ('schema_version', '3');
+INSERT OR IGNORE INTO sidecar_meta (key, value) VALUES ('schema_version', '4');
 
 CREATE TABLE IF NOT EXISTS tagging_run (
     run_id TEXT PRIMARY KEY,
@@ -123,6 +124,11 @@ CREATE TABLE IF NOT EXISTS tagging_attempt (
     num_predict INTEGER NOT NULL,
     generation_config_hash TEXT NOT NULL,
     created_at TEXT NOT NULL,
+    response_output_text TEXT,
+    response_output_hash TEXT,
+    response_output_truncated INTEGER NOT NULL DEFAULT 0,
+    response_output_bytes INTEGER,
+    response_output_stored_bytes INTEGER,
     UNIQUE(job_id, attempt_no),
     UNIQUE(lease_token)
 );
@@ -146,7 +152,7 @@ CREATE TABLE IF NOT EXISTS conversation_consolidation (
 
 
 class JobStore:
-    EXPECTED_SCHEMA_VERSION = 3
+    SIDECAR_DB_SCHEMA_VERSION = 4
 
     def _connect(self, isolation_level=None):
         import sqlite3
@@ -165,7 +171,10 @@ class JobStore:
 
         if db_exists:
             # Check version
-            with self._connect() as conn:
+            import sqlite3
+
+            uri = f"file:{self.db_path.absolute()}?mode=ro"
+            with sqlite3.connect(uri, uri=True) as conn:
                 try:
                     cursor = conn.execute(
                         "SELECT value FROM sidecar_meta WHERE key='schema_version'"
@@ -174,9 +183,9 @@ class JobStore:
                     version = int(row[0]) if row else 1
                 except sqlite3.OperationalError:
                     version = 1
-            if version != EXPECTED_SCHEMA_VERSION:
+            if version != self.SIDECAR_DB_SCHEMA_VERSION:
                 raise RuntimeError(
-                    f"Sidecar schema mismatch.\nExpected: {EXPECTED_SCHEMA_VERSION}\nFound: {version}\nCreate a backup and run an explicit reset command."
+                    f"Sidecar schema mismatch.\nExpected: {self.SIDECAR_DB_SCHEMA_VERSION}\nFound: {version}\nCreate a backup and run an explicit reset command. Old sidecars will not be mutated."
                 )
 
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -456,6 +465,7 @@ class JobStore:
         prompt_tokens: int,
         completion_tokens: int,
         done_reason: str,
+        raw_response_text: str = None,
     ):
         with self._connect(isolation_level="IMMEDIATE") as conn:
             conn.row_factory = sqlite3.Row
@@ -468,10 +478,50 @@ class JobStore:
                     f"Cannot record metadata: lease expired or invalid token for job {job_id}"
                 )
 
-            conn.execute(
-                "UPDATE tagging_attempt SET elapsed_ms = ?, prompt_tokens = ?, completion_tokens = ?, done_reason = ? WHERE attempt_id = ?",
-                (elapsed_ms, prompt_tokens, completion_tokens, done_reason, attempt_id),
-            )
+            import hashlib
+
+            response_output_hash = None
+            response_output_truncated = 0
+            response_output_bytes = 0
+            response_output_stored_bytes = 0
+            stored_text = raw_response_text
+
+            if raw_response_text is not None:
+                encoded = raw_response_text.encode("utf-8")
+                response_output_bytes = len(encoded)
+                response_output_hash = hashlib.sha256(encoded).hexdigest()
+
+                if response_output_bytes > MAX_STORED_RESPONSE_BYTES:
+                    response_output_truncated = 1
+                    stored_text = encoded[:MAX_STORED_RESPONSE_BYTES].decode(
+                        "utf-8", errors="ignore"
+                    )
+                    response_output_stored_bytes = len(stored_text.encode("utf-8"))
+                else:
+                    response_output_stored_bytes = response_output_bytes
+
+            try:
+                conn.execute(
+                    "UPDATE tagging_attempt SET elapsed_ms = ?, prompt_tokens = ?, completion_tokens = ?, done_reason = ?, response_output_text = ?, response_output_hash = ?, response_output_truncated = ?, response_output_bytes = ?, response_output_stored_bytes = ? WHERE attempt_id = ?",
+                    (
+                        elapsed_ms,
+                        prompt_tokens,
+                        completion_tokens,
+                        done_reason,
+                        stored_text,
+                        response_output_hash,
+                        response_output_truncated,
+                        response_output_bytes,
+                        response_output_stored_bytes,
+                        attempt_id,
+                    ),
+                )
+            except sqlite3.OperationalError:
+                # Fallback for old v3 sidecars that do not have the new columns
+                conn.execute(
+                    "UPDATE tagging_attempt SET elapsed_ms = ?, prompt_tokens = ?, completion_tokens = ?, done_reason = ? WHERE attempt_id = ?",
+                    (elapsed_ms, prompt_tokens, completion_tokens, done_reason, attempt_id),
+                )
 
     def retry_job(self, job_id: str, reason: str):
         with self._connect(isolation_level="IMMEDIATE") as conn:

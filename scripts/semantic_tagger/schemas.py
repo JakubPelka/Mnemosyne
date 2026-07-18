@@ -143,8 +143,8 @@ class SemanticConceptV3ModelOutput(BaseModel):
     surface_label: str
     preferred_label: str
     language: str
-    entity_types: List[str] = Field(default_factory=list, max_length=3)
-    domains: List[str] = Field(default_factory=list, max_length=5)
+    entity_types: List[str] = Field(min_length=1, max_length=3)
+    domains: List[str] = Field(min_length=1, max_length=5)
     context_roles: List[str] = Field(default_factory=list, max_length=3)
 
     importance: float = Field(ge=0.0, le=1.0)
