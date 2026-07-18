@@ -496,6 +496,7 @@ class JobStore:
         error_code: str,
         error_summary: str,
         done_reason: str = None,
+        retry_reason: str = None,
     ):
         with self._connect(isolation_level="IMMEDIATE") as conn:
             conn.row_factory = sqlite3.Row
@@ -507,11 +508,31 @@ class JobStore:
             if not row:
                 raise RuntimeError("Cannot fail job: lease expired or invalid token")
 
-            conn.execute(
-                "UPDATE tagging_job SET status = 'failed', error_code = ?, error_summary = ? WHERE job_id = ?",
-                (error_code, error_summary, job_id),
-            )
+            if retry_reason and row["attempt_count"] < 3:
+                conn.execute(
+                    "UPDATE tagging_job SET status = 'pending', lease_started_at = NULL, lease_expires_at = NULL, lease_token = NULL, retry_requested_at = ?, retry_reason = ? WHERE job_id = ?",
+                    (now, retry_reason, job_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE tagging_job SET status = 'failed', error_code = ?, error_summary = ? WHERE job_id = ?",
+                    (error_code, error_summary, job_id),
+                )
+
             conn.execute(
                 "UPDATE tagging_attempt SET status = 'failed', completed_at = ?, error_code = ?, error_summary = ?, done_reason = ? WHERE attempt_id = ?",
                 (now, error_code, error_summary, done_reason, attempt_id),
+            )
+
+    def mark_vocabulary_done(self, job_id: str):
+        with self._connect(isolation_level="IMMEDIATE") as conn:
+            conn.execute(
+                "UPDATE tagging_job SET vocabulary_status = 'done' WHERE job_id = ?", (job_id,)
+            )
+
+    def mark_vocabulary_failed(self, job_id: str, error_code: str):
+        with self._connect(isolation_level="IMMEDIATE") as conn:
+            conn.execute(
+                "UPDATE tagging_job SET vocabulary_status = 'failed', vocabulary_error_code = ? WHERE job_id = ?",
+                (error_code, job_id),
             )
