@@ -27,34 +27,37 @@ class HeartbeatThread(threading.Thread):
             self.active_context = None
 
     def run(self):
-        with sqlite3.connect(self.store.db_path) as conn:
-            conn.execute("PRAGMA journal_mode = WAL")
-            conn.execute("PRAGMA busy_timeout = 5000")
-            while self.running:
-                import datetime
+        import contextlib
 
-                now = datetime.datetime.utcnow().isoformat()
+        while self.running:
+            import datetime
 
+            now = datetime.datetime.utcnow().isoformat()
+
+            try:
+                with contextlib.closing(sqlite3.connect(self.store.db_path, timeout=5.0)) as conn:
+                    conn.execute("PRAGMA journal_mode = WAL")
+                    conn.execute("PRAGMA busy_timeout = 5000")
+                    with conn:
+                        conn.execute(
+                            "UPDATE worker_state SET heartbeat_at = ? WHERE run_id = ? AND worker_id = ?",
+                            (now, self.run_id, self.worker_id),
+                        )
+            except sqlite3.OperationalError:
+                pass
+
+            with self._lock:
+                ctx = self.active_context
+
+            if ctx:
                 try:
-                    conn.execute(
-                        "UPDATE worker_state SET heartbeat_at = ? WHERE run_id = ? AND worker_id = ?",
-                        (now, self.run_id, self.worker_id),
-                    )
-
-                    with self._lock:
-                        ctx = self.active_context
-
-                    if ctx:
-                        try:
-                            self.store.renew_lease(ctx.job_id, ctx.attempt_id, ctx.lease_token)
-                        except LeaseLostError:
-                            ctx.lease_lost_event.set()
-
-                    conn.commit()
+                    self.store.renew_lease(ctx.job_id, ctx.attempt_id, ctx.lease_token)
+                except LeaseLostError:
+                    ctx.lease_lost_event.set()
                 except sqlite3.OperationalError:
                     pass
 
-                time.sleep(3)
+            time.sleep(3)
 
     def stop(self):
         self.running = False

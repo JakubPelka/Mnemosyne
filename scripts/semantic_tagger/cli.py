@@ -389,13 +389,13 @@ def cmd_prepare_evaluation(args):
     print(f"source schema = {source_schema_version}")
     print("verified source content hash = success")
     print(f"target schema = {args.target_schema_version}")
-    
+
     with sqlite3.connect(store.db_path) as target_conn:
         target_conn.row_factory = sqlite3.Row
         unit_rows = target_conn.execute("SELECT content_hash FROM tagging_unit").fetchall()
         for u in unit_rows:
             print(f"target content hash = {u['content_hash']}")
-            
+
     print(f"units = {len(manifest_entries)}")
     print(f"jobs_pending = {len(manifest_entries)}")
     print("attempts = 0")
