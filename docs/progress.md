@@ -873,3 +873,17 @@ Opublikować korektę na istniejącej gałęzi bez scalania, a następnie wykona
 ### Commity
 
 - podgraf i filtr sąsiadów: `a6cd988`.
+## 2026-07-19 — Propagacja ról w przygotowaniu semantic taggera
+
+### Wykonane zadania
+
+- przygotowanie unitów pobiera kanoniczną rolę ChatGPT przez nieduplikujący `LEFT JOIN` po `event_id`;
+- `UnitBuilder` preferuje poprawną rolę źródłową i zachowuje dotychczasowe mapowanie `event_type` jako fallback;
+- serializacja, hashe i identyfikatory unitów uwzględniają rozwiązaną rolę;
+- dodano syntetyczne testy ról, kolejności, liczności joina i deterministyczności;
+- utworzono ignorowany sidecar diagnostyczny z czterema pending jobs, bez prób i outputów.
+
+### Znane ograniczenia
+
+- rekordy `chatgpt_conversation` bez `chatgpt_messages` nadal poprawnie otrzymują rolę `unknown`;
+- zachowanie granicy kontekstu i walidator nazw `3d_*` pozostają poza zakresem tej zmiany.

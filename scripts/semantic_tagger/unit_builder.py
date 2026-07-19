@@ -35,8 +35,14 @@ class UnitBuilder:
         current_unit = []
         sequence_no = 1
 
-        # Helper to map event_type reliably to role
-        def map_role(e_type):
+        # Prefer a canonical source role when available, while preserving the
+        # existing event-type mapping for source-agnostic events.
+        def resolve_role(event):
+            source_role = event.get("source_role")
+            if source_role in ("assistant", "user", "system", "tool"):
+                return source_role
+
+            e_type = event.get("event_type")
             if e_type in ("assistant", "user", "system", "tool"):
                 return e_type
             if e_type == "human":
@@ -69,7 +75,7 @@ class UnitBuilder:
                 seg = {
                     "event_id": e["event_id"],
                     "context_id": context_id,
-                    "role": map_role(e.get("event_type")),
+                    "role": resolve_role(e),
                     "start_char": 0,
                     "end_char": txt_len,
                     "sequence_in_unit": i,

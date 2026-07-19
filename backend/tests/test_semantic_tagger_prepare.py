@@ -4,7 +4,7 @@ import json
 from unittest.mock import patch
 
 from scripts.semantic_tagger.unit_serializer import compute_content_hash, serialize_semantic_unit
-from scripts.semantic_tagger.cli import cmd_prepare_evaluation
+from scripts.semantic_tagger.cli import cmd_prepare_evaluation, load_events_for_context
 import argparse
 
 
@@ -29,9 +29,11 @@ def fake_dbs(tmp_path):
         conn.execute(
             "CREATE TABLE events (event_id TEXT PRIMARY KEY, context_id TEXT, event_type TEXT, timestamp_start TEXT, title TEXT, text TEXT)"
         )
+        conn.execute("CREATE TABLE chatgpt_messages (event_id TEXT UNIQUE, role TEXT NOT NULL)")
         conn.execute(
             "INSERT INTO events VALUES ('e1', 'ctx1', 'chatgpt_message', '2026-07-01', 'Title', 'Hello world')"
         )
+        conn.execute("INSERT INTO chatgpt_messages VALUES ('e1', 'user')")
 
     source_db = tmp_path / "source.sqlite3"
     with sqlite3.connect(source_db) as conn:
@@ -134,6 +136,46 @@ def test_prepare_evaluation_success(fake_dbs, tmp_path):
         assert lin["target_unit_strategy_version"] == "unit-v3-whole-events"
         assert lin["source_sidecar_sha256"] is not None
         assert len(lin["source_sidecar_sha256"]) == 64
+
+        manifest = json.loads(units[0]["segments_json"])
+        assert manifest["segments"][0]["role"] == "user"
+
+
+def test_event_loading_left_join_preserves_cardinality_missing_rows_and_order(tmp_path):
+    db_path = tmp_path / "events.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "CREATE TABLE events (event_id TEXT PRIMARY KEY, context_id TEXT, event_type TEXT, timestamp_start TEXT, title TEXT, text TEXT)"
+        )
+        conn.execute("CREATE TABLE chatgpt_messages (event_id TEXT UNIQUE, role TEXT NOT NULL)")
+        conn.executemany(
+            "INSERT INTO events VALUES (?, 'ctx', 'chatgpt_message', ?, NULL, ?)",
+            [
+                ("e2", "2026-01-01", "Synthetic assistant"),
+                ("e1", "2026-01-01", "Synthetic user"),
+                ("e3", "2026-01-02", "Synthetic missing"),
+            ],
+        )
+        conn.executemany(
+            "INSERT INTO chatgpt_messages VALUES (?, ?)",
+            [("e1", "user"), ("e2", "assistant")],
+        )
+
+        rows = [dict(row) for row in load_events_for_context(conn, "ctx")]
+
+    assert [row["event_id"] for row in rows] == ["e1", "e2", "e3"]
+    assert [row["source_role"] for row in rows] == ["user", "assistant", None]
+
+
+def test_chatgpt_event_role_conflict_is_rejected_by_production_constraint(tmp_path):
+    db_path = tmp_path / "roles.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE chatgpt_messages (event_id TEXT UNIQUE, role TEXT NOT NULL)")
+        conn.execute("INSERT INTO chatgpt_messages VALUES ('e1', 'user')")
+
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute("INSERT INTO chatgpt_messages VALUES ('e1', 'assistant')")
 
 
 def test_prepare_evaluation_mismatch_aborts(fake_dbs, tmp_path):

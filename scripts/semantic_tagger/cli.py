@@ -17,6 +17,26 @@ def get_main_db():
     return sqlite3.connect(MAIN_DB_URI, uri=True)
 
 
+def load_events_for_context(conn: sqlite3.Connection, context_id: str):
+    """Load context events with their unique canonical ChatGPT role, if present."""
+    return conn.execute(
+        """
+        SELECT
+            e.event_id,
+            e.title,
+            e.text,
+            e.timestamp_start,
+            e.event_type,
+            cm.role AS source_role
+        FROM events AS e
+        LEFT JOIN chatgpt_messages AS cm ON cm.event_id = e.event_id
+        WHERE e.context_id = ?
+        ORDER BY e.timestamp_start ASC, e.event_id ASC
+        """,
+        (context_id,),
+    ).fetchall()
+
+
 def cmd_doctor(args):
     print("--- DOCTOR ---")
 
@@ -174,10 +194,7 @@ def cmd_prepare_rerun(args):
                 return
 
             ctx_id = entry["context_id"]
-            events_rows = conn.execute(
-                "SELECT event_id, title, text, timestamp_start, event_type FROM events WHERE context_id = ? ORDER BY timestamp_start ASC",
-                (ctx_id,),
-            ).fetchall()
+            events_rows = load_events_for_context(conn, ctx_id)
             events = [dict(r) for r in events_rows]
             title = next((e["title"] for e in events if e.get("title")), "")
             units = builder.build_units_for_context(ctx_id, events, title)
@@ -337,10 +354,7 @@ def cmd_prepare_evaluation(args):
                 entry = item["manifest_entry"]
 
                 ctx_id = entry["context_id"]
-                events_rows = conn.execute(
-                    "SELECT event_id, title, text, timestamp_start, event_type FROM events WHERE context_id = ? ORDER BY timestamp_start ASC",
-                    (ctx_id,),
-                ).fetchall()
+                events_rows = load_events_for_context(conn, ctx_id)
                 events = [dict(r) for r in events_rows]
                 title = next((e["title"] for e in events if e.get("title")), "")
 
@@ -443,10 +457,7 @@ def cmd_prepare(args):
         for ctx_row in contexts:
             ctx_id = ctx_row["context_id"]
             # Fetch events for context
-            events_rows = conn.execute(
-                "SELECT event_id, title, text, timestamp_start, event_type FROM events WHERE context_id = ? ORDER BY timestamp_start ASC",
-                (ctx_id,),
-            ).fetchall()
+            events_rows = load_events_for_context(conn, ctx_id)
             events = [dict(r) for r in events_rows]
 
             title = next((e["title"] for e in events if e.get("title")), "")
@@ -862,10 +873,7 @@ def cmd_corpus_stats(args):
             ).fetchone()
             title = ev_title["title"] if ev_title else ""
 
-            events = conn.execute(
-                "SELECT event_id, event_type, timestamp_start, text FROM events WHERE context_id = ? ORDER BY timestamp_start",
-                (ctx_id,),
-            ).fetchall()
+            events = load_events_for_context(conn, ctx_id)
             events = [dict(e) for e in events]
 
             units = builder.build_units_for_context(ctx_id, events, title)
