@@ -37,6 +37,138 @@ def load_events_for_context(conn: sqlite3.Connection, context_id: str):
     ).fetchall()
 
 
+def _prompt_budget_from_args(args, strategy_version: str):
+    if strategy_version != "unit-v3-prompt-budgeted-chunks":
+        return None
+    from scripts.semantic_tagger.prompt_budget import (
+        PROMPT_ESTIMATOR_VERSION,
+        PromptBudgetConfig,
+    )
+
+    requested_num_predict = getattr(args, "num_predict", None)
+    return PromptBudgetConfig(
+        num_ctx=getattr(args, "num_ctx", 8192),
+        max_prompt_tokens=getattr(args, "max_prompt_tokens", 5632),
+        num_predict=1536 if requested_num_predict is None else requested_num_predict,
+        safety_margin=getattr(args, "safety_margin", 1024),
+        prompt_estimator_version=getattr(
+            args, "prompt_estimator_version", PROMPT_ESTIMATOR_VERSION
+        ),
+        chunk_overlap_characters=getattr(args, "chunk_overlap_characters", 256),
+        chunk_boundary_backtrack_characters=getattr(
+            args, "chunk_boundary_backtrack_characters", 256
+        ),
+    )
+
+
+def _generation_settings(args, strategy_version: str) -> dict:
+    budget = _prompt_budget_from_args(args, strategy_version)
+    requested_num_predict = getattr(args, "num_predict", None)
+    settings = {
+        "think": args.think,
+        "stream": args.stream,
+        "temperature": args.temperature,
+        "seed": args.seed,
+        "num_predict": (
+            budget.num_predict
+            if budget is not None
+            else (4096 if requested_num_predict is None else requested_num_predict)
+        ),
+        "num_ctx": getattr(args, "num_ctx", 8192),
+        "request_timeout_seconds": getattr(args, "request_timeout_seconds", 3600),
+    }
+    if budget is not None:
+        settings.update(budget.as_settings())
+    return settings
+
+
+def _builder_for_strategy(
+    *,
+    strategy_version: str,
+    schema_version: str,
+    prompt_version: str,
+    args,
+):
+    if strategy_version == "unit-v3-prompt-budgeted-chunks":
+        from scripts.semantic_tagger.unit_planner import PromptBudgetUnitPlanner
+
+        return PromptBudgetUnitPlanner(
+            prompt_version=prompt_version,
+            schema_version=schema_version,
+            strategy_version=strategy_version,
+            budget=_prompt_budget_from_args(args, strategy_version),
+        )
+    return UnitBuilder(
+        schema_version=schema_version,
+        strategy_version=strategy_version,
+    )
+
+
+def _build_target_units(
+    builder,
+    strategy_version: str,
+    context_id: str,
+    events: list[dict],
+    title: str,
+    source_event_ids: list[str],
+) -> list[dict]:
+    if strategy_version == "unit-v3-prompt-budgeted-chunks":
+        wanted = set(source_event_ids)
+        selected = [event for event in events if event["event_id"] in wanted]
+        if {event["event_id"] for event in selected} != wanted:
+            raise ValueError("Source unit refers to an event absent from the canonical context")
+        return builder.build_units_for_context(context_id, selected, title)
+
+    units = builder.build_units_for_context(context_id, events, title)
+    return [unit for unit in units if unit["event_ids"] == source_event_ids]
+
+
+def _stage_v3_manifest_contexts(builder, verified_source_units: list[dict], conn):
+    """Apply manifest Contract A and return unique units plus explicit lineage edges."""
+    from scripts.semantic_tagger.unit_planner import plan_manifest_context_once
+
+    grouped: dict[str, list[dict]] = {}
+    for item in verified_source_units:
+        context_id = item["manifest_entry"]["context_id"]
+        grouped.setdefault(context_id, []).append(item)
+
+    staged_units = []
+    lineage_edges = []
+    seen_unit_ids: dict[str, str] = {}
+    for context_id in sorted(grouped):
+        source_items = grouped[context_id]
+        events = [dict(row) for row in load_events_for_context(conn, context_id)]
+        title = next((event["title"] for event in events if event.get("title")), "")
+        source_event_id_groups = [
+            list(item["reconstructed_old"].event_ids) for item in source_items
+        ]
+        context_units = plan_manifest_context_once(
+            builder,
+            context_id,
+            events,
+            title,
+            source_event_id_groups,
+        )
+        if not context_units:
+            raise ValueError("Prompt-budget planning produced no target units")
+        for unit in context_units:
+            previous_hash = seen_unit_ids.get(unit["unit_id"])
+            if previous_hash is not None:
+                raise ValueError("Prompt-budget planning produced a duplicate target unit identity")
+            seen_unit_ids[unit["unit_id"]] = unit["content_hash"]
+            staged_units.append(unit)
+
+        for item in source_items:
+            source_event_ids = set(item["reconstructed_old"].event_ids)
+            for unit in context_units:
+                if source_event_ids.intersection(unit["event_ids"]):
+                    lineage_edges.append((item, unit))
+
+    if len(staged_units) != len(seen_unit_ids):
+        raise ValueError("Prompt-budget target units are not explicitly unique")
+    return {"units": staged_units, "lineage_edges": lineage_edges}
+
+
 def cmd_doctor(args):
     print("--- DOCTOR ---")
 
@@ -121,7 +253,6 @@ def cmd_prepare_rerun(args):
     import hashlib
     from pathlib import Path
     from scripts.semantic_tagger.job_store import JobStore
-    from scripts.semantic_tagger.unit_builder import UnitBuilder
     from scripts.semantic_tagger.content_loader import load_and_reconstruct_unit
 
     source_sidecar = Path(args.source_sidecar)
@@ -153,17 +284,77 @@ def cmd_prepare_rerun(args):
             f"Expected {args.expected_contexts} unique contexts, but manifest has {len(unique_contexts)}"
         )
 
-    store = JobStore(target_sidecar)
+    settings = _generation_settings(args, args.unit_strategy_version)
 
-    settings = {
-        "think": args.think,
-        "stream": args.stream,
-        "temperature": args.temperature,
-        "seed": args.seed,
-        "num_predict": args.num_predict,
-        "num_ctx": args.num_ctx,
-        "request_timeout_seconds": args.request_timeout_seconds,
-    }
+    if args.unit_strategy_version == "unit-v3-prompt-budgeted-chunks":
+        builder = _builder_for_strategy(
+            strategy_version=args.unit_strategy_version,
+            schema_version=args.schema_version,
+            prompt_version=args.prompt_version,
+            args=args,
+        )
+        verified_source_units = []
+        with get_main_db() as conn:
+            conn.row_factory = sqlite3.Row
+            for entry in manifest_entries:
+                reconstructed_old = load_and_reconstruct_unit(
+                    entry["unit_id"],
+                    str(source_sidecar),
+                    "semantic-tags-v1",
+                    "unit-v2-whole-events",
+                )
+                if reconstructed_old.content_hash != entry["content_hash"]:
+                    raise ValueError("Old content hash verification failed")
+                verified_source_units.append(
+                    {
+                        "manifest_entry": entry,
+                        "reconstructed_old": reconstructed_old,
+                        "old_unit_id": entry["unit_id"],
+                    }
+                )
+            staged_plan = _stage_v3_manifest_contexts(
+                builder,
+                verified_source_units,
+                conn,
+            )
+
+        store = JobStore(target_sidecar)
+        run_id = store.create_run(
+            {
+                "model_name": args.model,
+                "prompt_version": args.prompt_version,
+                "schema_version": args.schema_version,
+                "unit_strategy_version": args.unit_strategy_version,
+                "settings": settings,
+            }
+        )
+        generation_config_hash = hashlib.sha256(
+            json.dumps(settings, sort_keys=True).encode()
+        ).hexdigest()
+        for unit in staged_plan["units"]:
+            store.save_unit(unit, require_unique=True)
+            job_key_raw = f"{unit['unit_id']}|{unit['content_hash']}|{args.model}|<digest>|{args.prompt_version}|{args.schema_version}|{args.unit_strategy_version}|{generation_config_hash}"
+            job_key = hashlib.sha256(job_key_raw.encode()).hexdigest()
+            store.queue_v3_unit_job(
+                job_key,
+                run_id,
+                unit["unit_id"],
+                unit["content_hash"],
+            )
+        with sqlite3.connect(store.db_path) as target_conn:
+            actual_jobs = target_conn.execute(
+                "SELECT COUNT(*) FROM tagging_job WHERE run_id = ? AND status = 'pending'",
+                (run_id,),
+            ).fetchone()[0]
+        if actual_jobs != len(staged_plan["units"]):
+            raise ValueError("Prepared target count does not equal actual unique target jobs")
+        print(f"units = {len(staged_plan['units'])}")
+        print(f"jobs_pending = {actual_jobs}")
+        print("attempts = 0")
+        print(f"run_id = {run_id}")
+        return
+
+    store = JobStore(target_sidecar)
 
     run_info = {
         "model_name": args.model,
@@ -177,9 +368,13 @@ def cmd_prepare_rerun(args):
 
     with get_main_db() as conn:
         conn.row_factory = sqlite3.Row
-        builder = UnitBuilder(
-            schema_version=args.schema_version, strategy_version=args.unit_strategy_version
+        builder = _builder_for_strategy(
+            strategy_version=args.unit_strategy_version,
+            schema_version=args.schema_version,
+            prompt_version=args.prompt_version,
+            args=args,
         )
+        prepared_count = 0
 
         for entry in manifest_entries:
             old_unit_id = entry["unit_id"]
@@ -197,25 +392,30 @@ def cmd_prepare_rerun(args):
             events_rows = load_events_for_context(conn, ctx_id)
             events = [dict(r) for r in events_rows]
             title = next((e["title"] for e in events if e.get("title")), "")
-            units = builder.build_units_for_context(ctx_id, events, title)
-
-            matching = [u for u in units if u["event_ids"] == list(reconstructed_old.event_ids)]
+            matching = _build_target_units(
+                builder,
+                args.unit_strategy_version,
+                ctx_id,
+                events,
+                title,
+                list(reconstructed_old.event_ids),
+            )
             if not matching:
                 print(f"Could not find matching event set for {old_unit_id}")
                 return
-            new_u = matching[0]
+            for new_u in matching:
+                store.save_unit(new_u)
 
-            store.save_unit(new_u)
+                gen_config_str = json.dumps(settings, sort_keys=True)
+                generation_config_hash = hashlib.sha256(gen_config_str.encode()).hexdigest()
 
-            gen_config_str = json.dumps(settings, sort_keys=True)
-            generation_config_hash = hashlib.sha256(gen_config_str.encode()).hexdigest()
+                job_key_raw = f"{new_u['unit_id']}|{new_u['content_hash']}|{args.model}|<digest>|{args.prompt_version}|{args.schema_version}|{args.unit_strategy_version}|{generation_config_hash}"
+                job_key = hashlib.sha256(job_key_raw.encode()).hexdigest()
+                store.queue_job(job_key, run_id, new_u["unit_id"], new_u["content_hash"])
+                prepared_count += 1
 
-            job_key_raw = f"{new_u['unit_id']}|{new_u['content_hash']}|{args.model}|<digest>|{args.prompt_version}|{args.schema_version}|{args.unit_strategy_version}|{generation_config_hash}"
-            job_key = hashlib.sha256(job_key_raw.encode()).hexdigest()
-            store.queue_job(job_key, run_id, new_u["unit_id"], new_u["content_hash"])
-
-    print(f"units = {len(manifest_entries)}")
-    print(f"jobs_pending = {len(manifest_entries)}")
+    print(f"units = {prepared_count}")
+    print(f"jobs_pending = {prepared_count}")
     print("attempts = 0")
     print(f"run_id = {run_id}")
 
@@ -226,7 +426,6 @@ def cmd_prepare_evaluation(args):
     import hashlib
     from pathlib import Path
     from scripts.semantic_tagger.job_store import JobStore
-    from scripts.semantic_tagger.unit_builder import UnitBuilder
     from scripts.semantic_tagger.content_loader import load_and_reconstruct_unit
 
     source_sidecar = Path(args.source_sidecar)
@@ -253,12 +452,15 @@ def cmd_prepare_evaluation(args):
         )
 
     # 1. Read source tagging_run
-    with sqlite3.connect(source_sidecar) as conn:
+    source_uri = f"{source_sidecar.resolve().as_uri()}?mode=ro"
+    with sqlite3.connect(source_uri, uri=True) as conn:
         conn.row_factory = sqlite3.Row
         query = "SELECT run_id, schema_version, unit_strategy_version FROM tagging_run ORDER BY created_at DESC LIMIT 1"
+        query_parameters = ()
         if args.source_run_id:
-            query = f"SELECT run_id, schema_version, unit_strategy_version FROM tagging_run WHERE run_id = '{args.source_run_id}'"
-        source_run_row = conn.execute(query).fetchone()
+            query = "SELECT run_id, schema_version, unit_strategy_version FROM tagging_run WHERE run_id = ?"
+            query_parameters = (args.source_run_id,)
+        source_run_row = conn.execute(query, query_parameters).fetchone()
         if not source_run_row:
             print("Could not find source tagging_run.")
             return
@@ -298,18 +500,25 @@ def cmd_prepare_evaluation(args):
                 }
             )
 
-    # 3. Create target units and jobs
-    store = JobStore(target_sidecar)
+    settings = _generation_settings(args, args.target_unit_strategy_version)
+    staged_v3_plan = None
+    if args.target_unit_strategy_version == "unit-v3-prompt-budgeted-chunks":
+        target_builder = _builder_for_strategy(
+            strategy_version=args.target_unit_strategy_version,
+            schema_version=args.target_schema_version,
+            prompt_version=args.target_prompt_version,
+            args=args,
+        )
+        with get_main_db() as conn:
+            conn.row_factory = sqlite3.Row
+            staged_v3_plan = _stage_v3_manifest_contexts(
+                target_builder,
+                verified_source_units,
+                conn,
+            )
 
-    settings = {
-        "think": args.think,
-        "stream": args.stream,
-        "temperature": args.temperature,
-        "seed": args.seed,
-        "num_predict": args.num_predict,
-        "num_ctx": args.num_ctx,
-        "request_timeout_seconds": getattr(args, "request_timeout_seconds", 3600),
-    }
+    # 3. Create target units and jobs only after every v3 source unit plans successfully.
+    store = JobStore(target_sidecar)
 
     run_info = {
         "model_name": args.model,
@@ -342,53 +551,36 @@ def cmd_prepare_evaluation(args):
 
     with get_main_db() as conn:
         conn.row_factory = sqlite3.Row
-        target_builder = UnitBuilder(
-            schema_version=args.target_schema_version,
+        target_builder = _builder_for_strategy(
             strategy_version=args.target_unit_strategy_version,
+            schema_version=args.target_schema_version,
+            prompt_version=args.target_prompt_version,
+            args=args,
         )
+        prepared_count = 0
+        lineage_rows = []
 
-        with sqlite3.connect(store.db_path) as target_conn:
-            for item in verified_source_units:
-                old_unit_id = item["old_unit_id"]
-                reconstructed_old = item["reconstructed_old"]
-                entry = item["manifest_entry"]
-
-                ctx_id = entry["context_id"]
-                events_rows = load_events_for_context(conn, ctx_id)
-                events = [dict(r) for r in events_rows]
-                title = next((e["title"] for e in events if e.get("title")), "")
-
-                units = target_builder.build_units_for_context(ctx_id, events, title)
-                matching = [u for u in units if u["event_ids"] == list(reconstructed_old.event_ids)]
-                if not matching:
-                    print(
-                        f"Could not find matching event set for {old_unit_id} in target reconstruction."
-                    )
-                    return
-                new_u = matching[0]
-
-                store.save_unit(new_u)
-
+        if staged_v3_plan is not None:
+            for new_u in staged_v3_plan["units"]:
+                store.save_unit(new_u, require_unique=True)
                 gen_config_str = json.dumps(settings, sort_keys=True)
                 generation_config_hash = hashlib.sha256(gen_config_str.encode()).hexdigest()
-
                 job_key_raw = f"{new_u['unit_id']}|{new_u['content_hash']}|{args.model}|<digest>|{args.target_prompt_version}|{args.target_schema_version}|{args.target_unit_strategy_version}|{generation_config_hash}"
                 job_key = hashlib.sha256(job_key_raw.encode()).hexdigest()
-                store.queue_job(job_key, target_run_id, new_u["unit_id"], new_u["content_hash"])
-
-                # Insert lineage
-                target_conn.execute(
-                    """
-                    INSERT INTO tagging_unit_lineage (
-                        source_sidecar_sha256, source_run_id, source_unit_id, source_content_hash,
-                        source_schema_version, source_unit_strategy_version,
-                        target_unit_id, target_content_hash, target_schema_version, target_unit_strategy_version
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
+                store.queue_v3_unit_job(
+                    job_key,
+                    target_run_id,
+                    new_u["unit_id"],
+                    new_u["content_hash"],
+                )
+            prepared_count = len(staged_v3_plan["units"])
+            for item, new_u in staged_v3_plan["lineage_edges"]:
+                entry = item["manifest_entry"]
+                lineage_rows.append(
                     (
                         source_sha256,
                         source_run_id,
-                        old_unit_id,
+                        item["old_unit_id"],
                         entry["content_hash"],
                         source_schema_version,
                         source_unit_strategy_version,
@@ -396,8 +588,74 @@ def cmd_prepare_evaluation(args):
                         new_u["content_hash"],
                         args.target_schema_version,
                         args.target_unit_strategy_version,
-                    ),
+                    )
                 )
+        else:
+            for item in verified_source_units:
+                old_unit_id = item["old_unit_id"]
+                reconstructed_old = item["reconstructed_old"]
+                entry = item["manifest_entry"]
+                ctx_id = entry["context_id"]
+                events = [dict(row) for row in load_events_for_context(conn, ctx_id)]
+                title = next((event["title"] for event in events if event.get("title")), "")
+                matching = _build_target_units(
+                    target_builder,
+                    args.target_unit_strategy_version,
+                    ctx_id,
+                    events,
+                    title,
+                    list(reconstructed_old.event_ids),
+                )
+                if not matching:
+                    print(
+                        f"Could not find matching event set for {old_unit_id} in target reconstruction."
+                    )
+                    return
+                for new_u in matching:
+                    store.save_unit(new_u)
+                    gen_config_str = json.dumps(settings, sort_keys=True)
+                    generation_config_hash = hashlib.sha256(gen_config_str.encode()).hexdigest()
+                    job_key_raw = f"{new_u['unit_id']}|{new_u['content_hash']}|{args.model}|<digest>|{args.target_prompt_version}|{args.target_schema_version}|{args.target_unit_strategy_version}|{generation_config_hash}"
+                    job_key = hashlib.sha256(job_key_raw.encode()).hexdigest()
+                    store.queue_job(
+                        job_key,
+                        target_run_id,
+                        new_u["unit_id"],
+                        new_u["content_hash"],
+                    )
+                    lineage_rows.append(
+                        (
+                            source_sha256,
+                            source_run_id,
+                            old_unit_id,
+                            entry["content_hash"],
+                            source_schema_version,
+                            source_unit_strategy_version,
+                            new_u["unit_id"],
+                            new_u["content_hash"],
+                            args.target_schema_version,
+                            args.target_unit_strategy_version,
+                        )
+                    )
+                    prepared_count += 1
+
+    with sqlite3.connect(store.db_path) as target_conn:
+        target_conn.executemany(
+            """
+            INSERT INTO tagging_unit_lineage (
+                source_sidecar_sha256, source_run_id, source_unit_id, source_content_hash,
+                source_schema_version, source_unit_strategy_version,
+                target_unit_id, target_content_hash, target_schema_version, target_unit_strategy_version
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            lineage_rows,
+        )
+        actual_jobs = target_conn.execute(
+            "SELECT COUNT(*) FROM tagging_job WHERE run_id = ? AND status = 'pending'",
+            (target_run_id,),
+        ).fetchone()[0]
+    if prepared_count != actual_jobs:
+        raise ValueError("prepared_count does not equal actual unique target jobs")
 
     print(f"source hash = {source_sha256}")
     print(f"source schema = {source_schema_version}")
@@ -410,8 +668,8 @@ def cmd_prepare_evaluation(args):
         for u in unit_rows:
             print(f"target content hash = {u['content_hash']}")
 
-    print(f"units = {len(manifest_entries)}")
-    print(f"jobs_pending = {len(manifest_entries)}")
+    print(f"units = {prepared_count}")
+    print(f"jobs_pending = {prepared_count}")
     print("attempts = 0")
     print(f"run_id = {target_run_id}")
     print(f"sidecar = {args.target_sidecar}")
@@ -972,6 +1230,27 @@ def cmd_vocabulary_candidates(args):
             )
 
 
+def cmd_plan_v3_dry_run(args):
+    from pathlib import Path
+
+    from scripts.semantic_tagger.planner_dry_run import write_dry_run_reports
+
+    data = write_dry_run_reports(
+        main_db=Path(args.main_db),
+        calibration_json=Path(args.calibration_json),
+        comparison_sidecar=Path(args.comparison_sidecar),
+        output_json=Path(args.output_json),
+        output_markdown=Path(args.output_markdown),
+    )
+    corpus = data["corpus"]
+    print(f"original_inferable_v2_units = {corpus['original_inferable_v2_units']}")
+    print(f"resulting_v3_unit_count = {corpus['resulting_v3_unit_count']}")
+    print(f"units_exceeding_5632 = {corpus['units_exceeding_5632']}")
+    print(f"planning_failures = {corpus['planning_failure_count']}")
+    print(f"output_json = {args.output_json}")
+    print(f"output_markdown = {args.output_markdown}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Semantic Tagger CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -997,8 +1276,18 @@ def main():
     )
     parser_prepare_rerun.add_argument("--temperature", type=int, default=0)
     parser_prepare_rerun.add_argument("--seed", type=int, default=42)
-    parser_prepare_rerun.add_argument("--num-predict", type=int, default=4096)
+    parser_prepare_rerun.add_argument("--num-predict", type=int)
     parser_prepare_rerun.add_argument("--num-ctx", type=int, default=8192)
+    parser_prepare_rerun.add_argument("--max-prompt-tokens", type=int, default=5632)
+    parser_prepare_rerun.add_argument("--safety-margin", type=int, default=1024)
+    parser_prepare_rerun.add_argument(
+        "--prompt-estimator-version",
+        default="prompt-estimator-v2-utf8-13-over-40",
+    )
+    parser_prepare_rerun.add_argument("--chunk-overlap-characters", type=int, default=256)
+    parser_prepare_rerun.add_argument(
+        "--chunk-boundary-backtrack-characters", type=int, default=256
+    )
     parser_prepare_rerun.add_argument("--request-timeout-seconds", type=int, default=3600)
     parser_prepare_rerun.add_argument("--expected-units", type=int, required=True)
     parser_prepare_rerun.add_argument("--expected-contexts", type=int, required=True)
@@ -1020,8 +1309,18 @@ def main():
     )
     parser_prepare_evaluation.add_argument("--temperature", type=float, default=0.0)
     parser_prepare_evaluation.add_argument("--seed", type=int, default=42)
-    parser_prepare_evaluation.add_argument("--num-predict", type=int, default=4096)
+    parser_prepare_evaluation.add_argument("--num-predict", type=int)
     parser_prepare_evaluation.add_argument("--num-ctx", type=int, default=8192)
+    parser_prepare_evaluation.add_argument("--max-prompt-tokens", type=int, default=5632)
+    parser_prepare_evaluation.add_argument("--safety-margin", type=int, default=1024)
+    parser_prepare_evaluation.add_argument(
+        "--prompt-estimator-version",
+        default="prompt-estimator-v2-utf8-13-over-40",
+    )
+    parser_prepare_evaluation.add_argument("--chunk-overlap-characters", type=int, default=256)
+    parser_prepare_evaluation.add_argument(
+        "--chunk-boundary-backtrack-characters", type=int, default=256
+    )
     parser_prepare_evaluation.add_argument("--expected-units", type=int, required=True)
     parser_prepare_evaluation.add_argument("--expected-contexts", type=int, required=True)
 
@@ -1098,6 +1397,25 @@ def main():
     parser_vocab = subparsers.add_parser("vocabulary-candidates")
     parser_vocab.add_argument("--min-occurrences", type=int, default=1)
 
+    parser_plan_v3 = subparsers.add_parser("plan-v3-dry-run")
+    parser_plan_v3.add_argument("--main-db", default="data/mnemosyne.sqlite3")
+    parser_plan_v3.add_argument(
+        "--calibration-json",
+        default="data/semantic_tagger_prompt_budget_calibration_v2.local.json",
+    )
+    parser_plan_v3.add_argument(
+        "--comparison-sidecar",
+        default="data/semantic_tagger_v4_rolefix_prepare_probe.local.sqlite3",
+    )
+    parser_plan_v3.add_argument(
+        "--output-json",
+        default="data/semantic_tagger_unit_v3_planner_dry_run.local.json",
+    )
+    parser_plan_v3.add_argument(
+        "--output-markdown",
+        default="data/semantic_tagger_unit_v3_planner_dry_run.local.md",
+    )
+
     parser_export = subparsers.add_parser("export-review")
     parser_export.add_argument("--output", required=True)
     parser_export.add_argument(
@@ -1134,6 +1452,8 @@ def main():
         cmd_prepare_evaluation(args)
     elif args.command == "prepare":
         cmd_prepare(args)
+    elif args.command == "plan-v3-dry-run":
+        cmd_plan_v3_dry_run(args)
 
     if args.command == "pause":
         from scripts.semantic_tagger.job_store import JobStore

@@ -205,6 +205,26 @@ class JobStore:
     def create_run(self, run_info: Dict[str, Any]) -> str:
         run_id = str(uuid.uuid4())
         now = self._now()
+        settings = run_info.get("settings", {})
+        if run_info.get("unit_strategy_version") == "unit-v3-prompt-budgeted-chunks":
+            from scripts.semantic_tagger.prompt_budget import PromptBudgetConfig
+
+            settings = dict(settings)
+            budget = PromptBudgetConfig(
+                num_ctx=settings.get("num_ctx", 8192),
+                max_prompt_tokens=settings.get("max_prompt_tokens", 5632),
+                num_predict=settings.get("num_predict", 1536),
+                safety_margin=settings.get("safety_margin", 1024),
+                prompt_estimator_version=settings.get(
+                    "prompt_estimator_version",
+                    "prompt-estimator-v2-utf8-13-over-40",
+                ),
+                chunk_overlap_characters=settings.get("chunk_overlap_characters", 256),
+                chunk_boundary_backtrack_characters=settings.get(
+                    "chunk_boundary_backtrack_characters", 256
+                ),
+            )
+            settings.update(budget.as_settings())
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO tagging_run (run_id, created_at, updated_at, status, source_database_fingerprint, model_name, model_digest, ollama_version, prompt_version, schema_version, unit_strategy_version, consolidation_prompt_version, settings_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -221,15 +241,16 @@ class JobStore:
                     run_info.get("schema_version"),
                     run_info.get("unit_strategy_version"),
                     run_info.get("consolidation_prompt_version"),
-                    json.dumps(run_info.get("settings", {})),
+                    json.dumps(settings),
                 ),
             )
         return run_id
 
-    def save_unit(self, unit: Dict[str, Any]):
+    def save_unit(self, unit: Dict[str, Any], *, require_unique: bool = False):
+        insert_verb = "INSERT" if require_unique else "INSERT OR IGNORE"
         with self._connect() as conn:
             conn.execute(
-                "INSERT OR IGNORE INTO tagging_unit (unit_id, context_id, sequence_no, content_hash, event_ids_json, segments_json, event_count, character_count, estimated_token_count, first_event_at, last_event_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                f"{insert_verb} INTO tagging_unit (unit_id, context_id, sequence_no, content_hash, event_ids_json, segments_json, event_count, character_count, estimated_token_count, first_event_at, last_event_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     unit["unit_id"],
                     unit["context_id"],
@@ -248,10 +269,116 @@ class JobStore:
 
     def queue_job(self, job_key: str, run_id: str, unit_id: str, input_hash: str):
         with self._connect() as conn:
+            run_row = conn.execute(
+                "SELECT unit_strategy_version FROM tagging_run WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if run_row and run_row["unit_strategy_version"] == "unit-v3-prompt-budgeted-chunks":
+                raise ValueError(
+                    "Prompt-budgeted units require authoritative queue_v3_unit_job validation"
+                )
             conn.execute(
                 "INSERT OR IGNORE INTO tagging_job (job_id, job_key, run_id, unit_id, status, attempt_count, input_hash) VALUES (?, ?, ?, ?, 'pending', 0, ?)",
                 (str(uuid.uuid4()), job_key, run_id, unit_id, input_hash),
             )
+
+    def queue_v3_unit_job(
+        self,
+        job_key: str,
+        run_id: str,
+        unit_id: str,
+        input_hash: str,
+        *,
+        main_db_uri: str | None = None,
+    ) -> int:
+        """Rebuild and remeasure authoritative v3 input immediately before queueing."""
+        from scripts.semantic_tagger.content_loader import load_and_reconstruct_unit
+        from scripts.semantic_tagger.prompt_budget import (
+            PROMPT_BUDGET_BASIS_ALL_SUPPORTED_ATTEMPTS,
+            PromptBudgetConfig,
+            estimate_supported_prompt_variants,
+        )
+
+        with self._connect() as conn:
+            run_row = conn.execute(
+                "SELECT unit_strategy_version, prompt_version, schema_version, settings_json "
+                "FROM tagging_run WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()
+            unit_row = conn.execute(
+                "SELECT content_hash, estimated_token_count, segments_json FROM tagging_unit "
+                "WHERE unit_id = ?",
+                (unit_id,),
+            ).fetchone()
+        if not run_row or not unit_row:
+            raise ValueError("Cannot queue an unknown prompt-budgeted run or unit")
+        if run_row["unit_strategy_version"] != "unit-v3-prompt-budgeted-chunks":
+            raise ValueError("queue_v3_unit_job requires the v3 prompt-budget strategy")
+        if unit_row["content_hash"] != input_hash:
+            raise ValueError("Prompt-budgeted input hash mismatch")
+
+        settings = json.loads(run_row["settings_json"] or "{}")
+        budget = PromptBudgetConfig(
+            num_ctx=settings.get("num_ctx", 8192),
+            max_prompt_tokens=settings.get("max_prompt_tokens", 5632),
+            num_predict=settings.get("num_predict", 1536),
+            safety_margin=settings.get("safety_margin", 1024),
+            prompt_estimator_version=settings.get(
+                "prompt_estimator_version", "prompt-estimator-v2-utf8-13-over-40"
+            ),
+            chunk_overlap_characters=settings.get("chunk_overlap_characters", 256),
+            chunk_boundary_backtrack_characters=settings.get(
+                "chunk_boundary_backtrack_characters", 256
+            ),
+        )
+        manifest = json.loads(unit_row["segments_json"] or "{}")
+        if manifest.get("unit_strategy_version") != run_row["unit_strategy_version"]:
+            raise ValueError("Prompt-budgeted unit strategy manifest mismatch")
+        if manifest.get("prompt_version") != run_row["prompt_version"]:
+            raise ValueError("Prompt-budgeted unit prompt version mismatch")
+        if manifest.get("schema_version") != run_row["schema_version"]:
+            raise ValueError("Prompt-budgeted unit schema version mismatch")
+        if manifest.get("prompt_estimator_version") != budget.prompt_estimator_version:
+            raise ValueError("Prompt-budgeted unit estimator manifest mismatch")
+        if manifest.get("prompt_budget_basis") != PROMPT_BUDGET_BASIS_ALL_SUPPORTED_ATTEMPTS:
+            raise ValueError("Prompt-budgeted unit was not planned against all supported attempts")
+
+        reconstructed = load_and_reconstruct_unit(
+            unit_id,
+            str(self.db_path),
+            run_row["schema_version"],
+            run_row["unit_strategy_version"],
+            main_db_uri=main_db_uri,
+        )
+        assessment = estimate_supported_prompt_variants(
+            run_row["prompt_version"],
+            reconstructed.content,
+            list(reconstructed.event_ids),
+            budget.prompt_estimator_version,
+        )
+        if manifest.get("prompt_budget") != assessment.as_manifest():
+            raise ValueError(
+                "Prompt-budgeted manifest estimates do not match authoritative recalculation"
+            )
+        recalculated = assessment.worst_case_prompt_estimate
+        if recalculated != unit_row["estimated_token_count"]:
+            raise ValueError(
+                "Prompt-budgeted stored worst-case estimate does not match "
+                "authoritative recalculation"
+            )
+        if recalculated > budget.max_prompt_tokens:
+            raise ValueError(
+                "Refusing to queue a prompt-budgeted unit whose supported prompt variant "
+                "exceeds the configured limit"
+            )
+
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO tagging_job (job_id, job_key, run_id, unit_id, status, "
+                "attempt_count, input_hash) VALUES (?, ?, ?, ?, 'pending', 0, ?)",
+                (str(uuid.uuid4()), job_key, run_id, unit_id, input_hash),
+            )
+        return recalculated
 
     def claim_next_job(
         self, run_id: str, worker_id: str, lease_seconds: int = 600
