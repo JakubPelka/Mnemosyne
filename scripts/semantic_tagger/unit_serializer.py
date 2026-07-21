@@ -1,3 +1,4 @@
+import json
 from typing import List, Dict, Any
 
 
@@ -45,3 +46,35 @@ def compute_content_hash(
 
     content_hash_raw = f"{schema_version}|{unit_strategy_version}|{canonical_content}"
     return safe_hash(content_hash_raw)
+
+
+def compute_v3_content_hash(
+    schema_version: str,
+    unit_strategy_version: str,
+    manifest: Dict[str, Any],
+    canonical_content: str,
+) -> str:
+    """Hash sliced v3 content together with its explicit range/overlap manifest."""
+    from scripts.semantic_tagger.privacy import safe_hash
+
+    manifest_json = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    content_hash_raw = (
+        f"{schema_version}|{unit_strategy_version}|{manifest_json}|{canonical_content}"
+    )
+    return safe_hash(content_hash_raw)
+
+
+def compute_reconstructed_content_hash(
+    schema_version: str,
+    unit_strategy_version: str,
+    manifest: Dict[str, Any],
+    canonical_content: str,
+) -> str:
+    if unit_strategy_version == "unit-v3-prompt-budgeted-chunks":
+        return compute_v3_content_hash(
+            schema_version,
+            unit_strategy_version,
+            manifest,
+            canonical_content,
+        )
+    return compute_content_hash(schema_version, unit_strategy_version, canonical_content)

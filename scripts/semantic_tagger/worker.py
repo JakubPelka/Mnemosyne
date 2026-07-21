@@ -7,6 +7,24 @@ from scripts.semantic_tagger.prompt_builder import PromptBuildError
 logger = logging.getLogger(__name__)
 
 
+def build_worker_final_prompt(job: dict, unit):
+    """Worker adapter for the shared final-prompt construction contract."""
+    from scripts.semantic_tagger.prompt_builder import (
+        build_supported_final_prompt_variants,
+        supported_prompt_variant_name,
+    )
+
+    prompt_version = job["prompt_version"]
+    if not prompt_version:
+        raise ValueError("Missing prompt_version in job configuration")
+    variant_name = supported_prompt_variant_name(job["attempt_count"], job.get("retry_reason"))
+    return build_supported_final_prompt_variants(
+        prompt_version,
+        unit.content,
+        list(unit.event_ids),
+    )[variant_name]
+
+
 class Worker:
     def __init__(self, job_store: JobStore, ollama_client: OllamaClient):
         self.store = job_store
@@ -19,30 +37,10 @@ class Worker:
         try:
             import json
             from pydantic import ValidationError
-            from scripts.semantic_tagger.prompt_builder import build_tagger_prompt
 
-            prompt_version = job["prompt_version"]
-            if not prompt_version:
-                raise ValueError("Missing prompt_version in job configuration")
-
-            prompt_res = build_tagger_prompt(
-                prompt_version,
-                unit.contains_code,
-                unit.contains_logs,
-                unit.contains_urls,
-                unit.content,
-                unit.event_ids,
-            )
+            prompt_res = build_worker_final_prompt(job, unit)
             prompt = prompt_res.prompt
             evidence_alias_to_event_id = prompt_res.evidence_alias_to_event_id
-
-            if attempt == 2:
-                if job.get("retry_reason") == "facets_missing":
-                    prompt += "\n\nThe previous response omitted required facets.\nReturn fewer concepts if necessary rather than inventing generic facets.\nEvery concept must contain 1 to 3 entity_types and 1 to 5 domains.\nEmpty arrays [] are strictly invalid for these fields."
-                else:
-                    prompt += "\n\nOstatnia próba zakończyła się błędem schematu. Zwróć tylko 100% poprawne dane, używając poprawnego JSON."
-            elif attempt == 3:
-                prompt += "\n\nOstatnia próba zakończyła się błędem schematu. Zwróć maksymalnie 6 pojęć i 0 relacji."
 
             schema_version = job["schema_version"]
             if not schema_version:

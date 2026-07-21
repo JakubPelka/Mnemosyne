@@ -3,7 +3,13 @@ import json
 from dataclasses import dataclass
 from typing import Tuple
 
-from scripts.semantic_tagger.unit_serializer import serialize_semantic_unit, compute_content_hash
+from pathlib import Path
+
+from scripts.semantic_tagger.unit_serializer import (
+    compute_reconstructed_content_hash,
+    serialize_semantic_unit,
+)
+from scripts.semantic_tagger.prompt_builder import analyze_content_signals
 
 MAIN_DB_URI = "file:data/mnemosyne.sqlite3?mode=ro"
 
@@ -22,9 +28,16 @@ class ReconstructedUnit:
 
 
 def load_and_reconstruct_unit(
-    unit_id: str, sidecar_db_path: str, schema_version: str, unit_strategy_version: str
+    unit_id: str,
+    sidecar_db_path: str,
+    schema_version: str,
+    unit_strategy_version: str,
+    *,
+    main_db_uri: str | None = None,
 ) -> ReconstructedUnit:
-    with sqlite3.connect(sidecar_db_path) as sidecar_conn:
+    authoritative_main_db_uri = main_db_uri or MAIN_DB_URI
+    sidecar_uri = f"{Path(sidecar_db_path).resolve().as_uri()}?mode=ro"
+    with sqlite3.connect(sidecar_uri, uri=True) as sidecar_conn:
         sidecar_conn.row_factory = sqlite3.Row
         unit_row = sidecar_conn.execute(
             "SELECT * FROM tagging_unit WHERE unit_id = ?", (unit_id,)
@@ -43,7 +56,7 @@ def load_and_reconstruct_unit(
 
     # Load title
     title_text = ""
-    with sqlite3.connect(MAIN_DB_URI, uri=True) as main_conn:
+    with sqlite3.connect(authoritative_main_db_uri, uri=True) as main_conn:
         main_conn.row_factory = sqlite3.Row
 
         if manifest.get("title_included"):
@@ -51,7 +64,8 @@ def load_and_reconstruct_unit(
             # We'll just fetch title from any event in context_id where title is not null/empty
             ctx_id = manifest.get("title_source", expected_context_id)
             ev = main_conn.execute(
-                "SELECT title FROM events WHERE context_id = ? AND title IS NOT NULL AND title != '' ORDER BY timestamp_start ASC LIMIT 1",
+                "SELECT title FROM events WHERE context_id = ? AND title IS NOT NULL "
+                "AND title != '' ORDER BY timestamp_start ASC, event_id ASC LIMIT 1",
                 (ctx_id,),
             ).fetchone()
             if ev:
@@ -61,7 +75,7 @@ def load_and_reconstruct_unit(
     segments_text = []
     event_ids = []
 
-    with sqlite3.connect(MAIN_DB_URI, uri=True) as main_conn:
+    with sqlite3.connect(authoritative_main_db_uri, uri=True) as main_conn:
         main_conn.row_factory = sqlite3.Row
 
         for seg in manifest.get("segments", []):
@@ -98,8 +112,11 @@ def load_and_reconstruct_unit(
 
     canonical_content = serialize_semantic_unit(manifest, segments_text, title_text)
 
-    reconstructed_hash = compute_content_hash(
-        schema_version, unit_strategy_version, canonical_content
+    reconstructed_hash = compute_reconstructed_content_hash(
+        schema_version,
+        unit_strategy_version,
+        manifest,
+        canonical_content,
     )
 
     if reconstructed_hash != stored_content_hash:
@@ -107,16 +124,7 @@ def load_and_reconstruct_unit(
             f"unit_content_hash_mismatch: {reconstructed_hash} != {stored_content_hash}"
         )
 
-    # Analyze signals (same logic as before)
-    contains_code = (
-        "```" in canonical_content or "def " in canonical_content or "function" in canonical_content
-    )
-    contains_logs = (
-        "ERROR" in canonical_content
-        or "WARN" in canonical_content
-        or "Traceback" in canonical_content
-    )
-    contains_urls = "http://" in canonical_content or "https://" in canonical_content
+    signals = analyze_content_signals(canonical_content)
 
     # Deduplicate event IDs preserving order
     unique_event_ids = []
@@ -130,8 +138,8 @@ def load_and_reconstruct_unit(
         content=canonical_content,
         content_hash=reconstructed_hash,
         event_ids=tuple(unique_event_ids),
-        contains_code=contains_code,
-        contains_logs=contains_logs,
-        contains_urls=contains_urls,
+        contains_code=signals.contains_code,
+        contains_logs=signals.contains_logs,
+        contains_urls=signals.contains_urls,
         language_hint=tuple(),
     )
