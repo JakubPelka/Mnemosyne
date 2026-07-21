@@ -49,9 +49,10 @@ class DummyUnit:
         self.unit_id = "u1"
 
 
-def test_persistence_failed_response(store):
+def test_persistence_failed_response(store, isolate_semantic_vocabulary):
     job_store, run_id = store
     job = job_store.claim_next_job(run_id, "w1")
+    assert not isolate_semantic_vocabulary.exists()
 
     mock_client = MagicMock()
     invalid_json = '{"languages": ["en"], "content_types": ["code"], "unit_quality": "meaningful", "concepts": [{"concept_id": "C1", "surface_label": "label", "preferred_label": "label", "language": "en", "evidence": ["E1"], "entity_types": [], "domains": [], "importance": 1, "confidence": 1}], "relations": []}'
@@ -77,11 +78,23 @@ def test_persistence_failed_response(store):
         assert a["response_output_truncated"] == 0
         assert a["response_output_bytes"] == len(invalid_json.encode("utf-8"))
         assert a["response_output_stored_bytes"] == a["response_output_bytes"]
+    assert not isolate_semantic_vocabulary.exists()
 
 
-def test_persistence_successful_response(store):
+def test_persistence_successful_response(
+    store,
+    isolate_semantic_vocabulary,
+    tmp_path,
+    monkeypatch,
+):
     job_store, run_id = store
     job = job_store.claim_next_job(run_id, "w1")
+    working_directory = tmp_path / "without-default-vocabulary"
+    working_directory.mkdir()
+    monkeypatch.chdir(working_directory)
+    default_vocabulary = working_directory / "data/semantic_vocabulary.local.sqlite3"
+    assert not default_vocabulary.exists()
+    assert not isolate_semantic_vocabulary.exists()
 
     mock_client = MagicMock()
     valid_json = '{"languages": ["en"], "content_types": ["code"], "unit_quality": "meaningful", "concepts": [{"concept_id": "C1", "surface_label": "label", "preferred_label": "label", "language": "en", "evidence": ["E1"], "entity_types": ["person"], "domains": ["general"], "importance": 1, "confidence": 1}], "relations": []}'
@@ -102,6 +115,21 @@ def test_persistence_successful_response(store):
 
         assert a["response_output_text"] == valid_json
         assert a["response_output_hash"] == hashlib.sha256(valid_json.encode("utf-8")).hexdigest()
+
+    assert not default_vocabulary.exists()
+    with sqlite3.connect(isolate_semantic_vocabulary) as conn:
+        occurrences = conn.execute(
+            """
+            SELECT o.dimension, c.normalized_label, o.unit_id, o.concept_id
+            FROM vocabulary_occurrence AS o
+            JOIN vocabulary_candidate AS c ON c.candidate_id = o.candidate_id
+            ORDER BY o.dimension, c.normalized_label
+            """
+        ).fetchall()
+    assert occurrences == [
+        ("domain", "general", "u1", "C1"),
+        ("entity_type", "person", "u1", "C1"),
+    ]
 
 
 def test_persistence_oversized_response(store):

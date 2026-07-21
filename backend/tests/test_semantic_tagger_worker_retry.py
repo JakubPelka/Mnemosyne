@@ -144,9 +144,22 @@ def test_non_retry_validation_failure_becomes_failed(store):
         assert j["error_code"] == "invalid_json"
 
 
-def test_successful_v3_output_becomes_done(store):
+def test_successful_v3_output_becomes_done(
+    store,
+    isolate_semantic_vocabulary,
+    tmp_path,
+    monkeypatch,
+):
     job_store, run_id = store
     job = job_store.claim_next_job(run_id, "w1")
+    working_directory = tmp_path / "readonly-default-vocabulary"
+    default_vocabulary = working_directory / "data/semantic_vocabulary.local.sqlite3"
+    default_vocabulary.parent.mkdir(parents=True)
+    sentinel = b"read-only synthetic vocabulary sentinel"
+    default_vocabulary.write_bytes(sentinel)
+    default_vocabulary.chmod(0o444)
+    monkeypatch.chdir(working_directory)
+    assert not isolate_semantic_vocabulary.exists()
 
     mock_client = MagicMock()
     valid_json = '{"languages": ["en"], "content_types": ["code"], "unit_quality": "meaningful", "concepts": [{"concept_id": "C1", "surface_label": "label", "preferred_label": "label", "language": "en", "evidence": ["E1"], "entity_types": ["person_name"], "domains": ["computer_science"], "importance": 1, "confidence": 1}], "relations": []}'
@@ -167,3 +180,22 @@ def test_successful_v3_output_becomes_done(store):
         ).fetchone()
         assert j["status"] == "done"
         assert j["output_hash"] is not None
+
+    assert default_vocabulary.read_bytes() == sentinel
+    assert not any(
+        default_vocabulary.with_name(default_vocabulary.name + suffix).exists()
+        for suffix in ("-wal", "-shm", "-journal")
+    )
+    with sqlite3.connect(isolate_semantic_vocabulary) as conn:
+        occurrences = conn.execute(
+            """
+            SELECT o.dimension, c.normalized_label, o.unit_id, o.concept_id
+            FROM vocabulary_occurrence AS o
+            JOIN vocabulary_candidate AS c ON c.candidate_id = o.candidate_id
+            ORDER BY o.dimension, c.normalized_label
+            """
+        ).fetchall()
+    assert occurrences == [
+        ("domain", "computer_science", "u1", "C1"),
+        ("entity_type", "person_name", "u1", "C1"),
+    ]
