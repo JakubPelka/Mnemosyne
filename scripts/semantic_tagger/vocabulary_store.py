@@ -4,6 +4,18 @@ from pathlib import Path
 import uuid
 import unicodedata
 
+from scripts.semantic_tagger.schemas import validate_concept_label
+
+
+V3_CONCEPT_LABEL_DIMENSIONS = frozenset({"entity_type", "domain", "context_role"})
+
+
+def validate_vocabulary_label(dimension: str, label: str) -> str:
+    """Apply the shared concept-label contract to v3 concept dimensions."""
+    if dimension in V3_CONCEPT_LABEL_DIMENSIONS:
+        return validate_concept_label(label)
+    return label
+
 
 def normalize_label(label: str) -> str:
     # Trim, Unicode normalization, lowercasing
@@ -160,6 +172,7 @@ class VocabularyStore:
         unit_id: str,
         concept_id: str,
     ):
+        validate_vocabulary_label(dimension, original_label)
         normalized = normalize_label(original_label)
         now = datetime.datetime.now(datetime.UTC).isoformat()
 

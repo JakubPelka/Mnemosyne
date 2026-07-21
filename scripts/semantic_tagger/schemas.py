@@ -1,6 +1,20 @@
 import re
-from typing import List, Literal
-from pydantic import BaseModel, Field, model_validator, field_validator
+from typing import Annotated, List, Literal
+
+from pydantic import BaseModel, Field, model_validator
+
+
+CONCEPT_LABEL_PATTERN = r"^(?:[a-z][a-z0-9_]*|[0-9][a-z0-9_]*[a-z][a-z0-9_]*)$"
+ConceptLabel = Annotated[str, Field(pattern=CONCEPT_LABEL_PATTERN)]
+_CONCEPT_LABEL_RE = re.compile(CONCEPT_LABEL_PATTERN, flags=re.ASCII)
+
+
+def validate_concept_label(label: str) -> str:
+    """Validate a lowercase ASCII vocabulary label without normalizing it."""
+    if _CONCEPT_LABEL_RE.fullmatch(label) is None:
+        raise ValueError(f"'{label}' must be a lowercase ASCII concept label containing a letter")
+    return label
+
 
 ConceptType = Literal[
     "project",
@@ -131,30 +145,18 @@ class ConversationConsolidationOutput(BaseModel):
     project_candidates: List[ProjectCandidate]
 
 
-def _validate_snake_case_list(v):
-    for item in v:
-        if not re.match(r"^[a-z][a-z0-9_]*$", item):
-            raise ValueError(f"'{item}' must be English ASCII snake_case")
-    return v
-
-
 class SemanticConceptV3ModelOutput(BaseModel):
     concept_id: str = Field(pattern=r"^C[1-8]$")
     surface_label: str
     preferred_label: str
     language: str
-    entity_types: List[str] = Field(min_length=1, max_length=3)
-    domains: List[str] = Field(min_length=1, max_length=5)
-    context_roles: List[str] = Field(default_factory=list, max_length=3)
+    entity_types: List[ConceptLabel] = Field(min_length=1, max_length=3)
+    domains: List[ConceptLabel] = Field(min_length=1, max_length=5)
+    context_roles: List[ConceptLabel] = Field(default_factory=list, max_length=3)
 
     importance: float = Field(ge=0.0, le=1.0)
     confidence: float = Field(ge=0.0, le=1.0)
     evidence: List[str] = Field(default_factory=list)
-
-    @field_validator("entity_types", "domains", "context_roles")
-    @classmethod
-    def validate_snake_case(cls, v):
-        return _validate_snake_case_list(v)
 
 
 class SemanticRelationV3ModelOutput(BaseModel):
@@ -219,18 +221,13 @@ class SemanticConceptV3Stored(BaseModel):
     surface_label: str
     preferred_label: str
     language: str
-    entity_types: List[str] = Field(default_factory=list, min_length=1, max_length=3)
-    domains: List[str] = Field(default_factory=list, min_length=1, max_length=5)
-    context_roles: List[str] = Field(default_factory=list, max_length=3)
+    entity_types: List[ConceptLabel] = Field(default_factory=list, min_length=1, max_length=3)
+    domains: List[ConceptLabel] = Field(default_factory=list, min_length=1, max_length=5)
+    context_roles: List[ConceptLabel] = Field(default_factory=list, max_length=3)
 
     importance: float = Field(ge=0.0, le=1.0)
     confidence: float = Field(ge=0.0, le=1.0)
     evidence_event_ids: List[str] = Field(default_factory=list)
-
-    @field_validator("entity_types", "domains", "context_roles")
-    @classmethod
-    def validate_snake_case(cls, v):
-        return _validate_snake_case_list(v)
 
 
 class SemanticRelationV3Stored(BaseModel):

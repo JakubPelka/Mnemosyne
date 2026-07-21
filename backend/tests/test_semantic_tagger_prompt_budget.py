@@ -251,7 +251,7 @@ def test_whole_event_greedy_packing_order_roles_and_ten_event_limit():
 
 
 def test_next_event_forces_deterministic_boundary_and_overlap_never_oversizes():
-    planner = _planner(max_prompt_tokens=2300, overlap_events=1)
+    planner = _planner(max_prompt_tokens=2400, overlap_events=1)
     events = [
         _event("e1", "a" * 700, "1"),
         _event("e2", "b" * 700, "2"),
@@ -260,7 +260,7 @@ def test_next_event_forces_deterministic_boundary_and_overlap_never_oversizes():
     units = planner.build_units_for_context("ctx", events)
 
     assert [unit["event_ids"] for unit in units] == [["e1"], ["e2"], ["e3"]]
-    assert all(unit["estimated_prompt_tokens"] <= 2300 for unit in units)
+    assert all(unit["estimated_prompt_tokens"] <= 2400 for unit in units)
 
 
 def test_complete_events_fit_together_when_complete_prompt_fits():
