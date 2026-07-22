@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Any
 
 from scripts.semantic_tagger.prompt_builder import (
     SUPPORTED_PROMPT_VARIANTS,
@@ -26,14 +27,32 @@ class PromptBudgetConfig:
     num_predict: int = DEFAULT_NUM_PREDICT
     safety_margin: int = DEFAULT_SAFETY_MARGIN
     prompt_estimator_version: str = PROMPT_ESTIMATOR_VERSION
+    prompt_estimator_contract: Any | None = None
     chunk_overlap_characters: int = DEFAULT_CHUNK_OVERLAP_CHARACTERS
     chunk_boundary_backtrack_characters: int = DEFAULT_CHUNK_BOUNDARY_BACKTRACK_CHARACTERS
 
     def __post_init__(self) -> None:
-        if self.prompt_estimator_version != PROMPT_ESTIMATOR_VERSION:
+        from scripts.semantic_tagger.qwen3_tokenizer import (
+            EXACT_PROMPT_ESTIMATOR_VERSION,
+            ExactTokenizerContract,
+        )
+
+        if self.prompt_estimator_version not in {
+            PROMPT_ESTIMATOR_VERSION,
+            EXACT_PROMPT_ESTIMATOR_VERSION,
+        }:
             raise PromptBudgetError(
                 f"Unsupported prompt estimator: {self.prompt_estimator_version}"
             )
+        if self.prompt_estimator_version == PROMPT_ESTIMATOR_VERSION:
+            if self.prompt_estimator_contract is not None:
+                raise PromptBudgetError("The v2 byte estimator must not carry a tokenizer contract")
+        elif not isinstance(self.prompt_estimator_contract, ExactTokenizerContract):
+            raise PromptBudgetError(
+                "The exact prompt estimator requires a resolved pinned tokenizer contract"
+            )
+        elif self.prompt_estimator_contract.estimator_version != self.prompt_estimator_version:
+            raise PromptBudgetError("Prompt estimator version and tokenizer contract disagree")
         for field_name in (
             "num_ctx",
             "max_prompt_tokens",
@@ -59,8 +78,8 @@ class PromptBudgetConfig:
                 f"is {allocated}, above num_ctx={self.num_ctx}"
             )
 
-    def as_settings(self) -> dict[str, int | str]:
-        return {
+    def as_settings(self) -> dict[str, Any]:
+        settings: dict[str, Any] = {
             "num_ctx": self.num_ctx,
             "max_prompt_tokens": self.max_prompt_tokens,
             "num_predict": self.num_predict,
@@ -69,17 +88,71 @@ class PromptBudgetConfig:
             "chunk_overlap_characters": self.chunk_overlap_characters,
             "chunk_boundary_backtrack_characters": (self.chunk_boundary_backtrack_characters),
         }
+        if self.prompt_estimator_contract is not None:
+            settings["prompt_estimator_contract"] = self.prompt_estimator_contract.as_manifest()
+        return settings
+
+
+def resolve_prompt_estimator_contract(
+    estimator_version: str,
+    model_name: str,
+    *,
+    persisted_contract: dict[str, Any] | None = None,
+):
+    """Resolve v3 exact metadata and optionally match persisted path-free pins."""
+    if estimator_version == PROMPT_ESTIMATOR_VERSION:
+        if persisted_contract is not None:
+            raise PromptBudgetError("The v2 byte estimator has unexpected tokenizer metadata")
+        return None
+
+    from scripts.semantic_tagger.qwen3_tokenizer import (
+        EXACT_PROMPT_ESTIMATOR_VERSION,
+        ExactTokenizerContractError,
+        resolve_exact_tokenizer_contract,
+    )
+
+    if estimator_version != EXACT_PROMPT_ESTIMATOR_VERSION:
+        raise PromptBudgetError(f"Unsupported prompt estimator: {estimator_version}")
+    try:
+        contract = resolve_exact_tokenizer_contract(model_name)
+    except ExactTokenizerContractError as error:
+        raise PromptBudgetError(f"Exact prompt estimator is unavailable: {error}") from error
+    if persisted_contract is not None and persisted_contract != contract.as_manifest():
+        raise PromptBudgetError(
+            "Persisted exact prompt-estimator contract does not match the local pinned model"
+        )
+    return contract
 
 
 def estimate_prompt_tokens(
     final_prompt: str,
     estimator_version: str = PROMPT_ESTIMATOR_VERSION,
+    estimator_contract=None,
 ) -> int:
     """Estimate a complete final prompt using the immutable calibrated contract."""
-    if estimator_version != PROMPT_ESTIMATOR_VERSION:
+    if estimator_version == PROMPT_ESTIMATOR_VERSION:
+        if estimator_contract is not None:
+            raise PromptBudgetError("The v2 byte estimator must not use a tokenizer contract")
+        utf8_byte_count = len(final_prompt.encode("utf-8"))
+        return (13 * utf8_byte_count + 39) // 40
+
+    from scripts.semantic_tagger.qwen3_tokenizer import (
+        EXACT_PROMPT_ESTIMATOR_VERSION,
+        ExactTokenizerContract,
+        ExactTokenizerContractError,
+        estimate_server_prompt_tokens,
+    )
+
+    if estimator_version != EXACT_PROMPT_ESTIMATOR_VERSION:
         raise PromptBudgetError(f"Unsupported prompt estimator: {estimator_version}")
-    utf8_byte_count = len(final_prompt.encode("utf-8"))
-    return (13 * utf8_byte_count + 39) // 40
+    if not isinstance(estimator_contract, ExactTokenizerContract):
+        raise PromptBudgetError(
+            "Exact prompt estimation requires the resolved pinned tokenizer contract"
+        )
+    try:
+        return estimate_server_prompt_tokens(final_prompt, estimator_contract)
+    except ExactTokenizerContractError as error:
+        raise PromptBudgetError(f"Exact prompt estimation failed: {error}") from error
 
 
 @dataclass(frozen=True)
@@ -109,6 +182,7 @@ def estimate_supported_prompt_variants(
     content: str,
     event_ids: list[str],
     estimator_version: str = PROMPT_ESTIMATOR_VERSION,
+    estimator_contract=None,
 ) -> PromptVariantBudget:
     """Estimate every worker prompt variant and return the authoritative maximum."""
     prompts = build_supported_final_prompt_variants(prompt_version, content, event_ids)
@@ -116,6 +190,7 @@ def estimate_supported_prompt_variants(
         variant.name: estimate_prompt_tokens(
             prompts[variant.name].prompt,
             estimator_version,
+            estimator_contract,
         )
         for variant in SUPPORTED_PROMPT_VARIANTS
     }
