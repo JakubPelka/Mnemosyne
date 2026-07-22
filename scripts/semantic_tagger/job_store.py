@@ -207,18 +207,28 @@ class JobStore:
         now = self._now()
         settings = run_info.get("settings", {})
         if run_info.get("unit_strategy_version") == "unit-v3-prompt-budgeted-chunks":
-            from scripts.semantic_tagger.prompt_budget import PromptBudgetConfig
+            from scripts.semantic_tagger.prompt_budget import (
+                PromptBudgetConfig,
+                resolve_prompt_estimator_contract,
+            )
 
             settings = dict(settings)
+            estimator_version = settings.get(
+                "prompt_estimator_version",
+                "prompt-estimator-v2-utf8-13-over-40",
+            )
+            estimator_contract = resolve_prompt_estimator_contract(
+                estimator_version,
+                run_info.get("model_name") or "",
+                persisted_contract=settings.get("prompt_estimator_contract"),
+            )
             budget = PromptBudgetConfig(
                 num_ctx=settings.get("num_ctx", 8192),
                 max_prompt_tokens=settings.get("max_prompt_tokens", 5632),
                 num_predict=settings.get("num_predict", 1536),
                 safety_margin=settings.get("safety_margin", 1024),
-                prompt_estimator_version=settings.get(
-                    "prompt_estimator_version",
-                    "prompt-estimator-v2-utf8-13-over-40",
-                ),
+                prompt_estimator_version=estimator_version,
+                prompt_estimator_contract=estimator_contract,
                 chunk_overlap_characters=settings.get("chunk_overlap_characters", 256),
                 chunk_boundary_backtrack_characters=settings.get(
                     "chunk_boundary_backtrack_characters", 256
@@ -297,11 +307,13 @@ class JobStore:
             PROMPT_BUDGET_BASIS_ALL_SUPPORTED_ATTEMPTS,
             PromptBudgetConfig,
             estimate_supported_prompt_variants,
+            resolve_prompt_estimator_contract,
         )
 
         with self._connect() as conn:
             run_row = conn.execute(
-                "SELECT unit_strategy_version, prompt_version, schema_version, settings_json "
+                "SELECT unit_strategy_version, prompt_version, schema_version, model_name, "
+                "settings_json "
                 "FROM tagging_run WHERE run_id = ?",
                 (run_id,),
             ).fetchone()
@@ -318,14 +330,21 @@ class JobStore:
             raise ValueError("Prompt-budgeted input hash mismatch")
 
         settings = json.loads(run_row["settings_json"] or "{}")
+        estimator_version = settings.get(
+            "prompt_estimator_version", "prompt-estimator-v2-utf8-13-over-40"
+        )
+        estimator_contract = resolve_prompt_estimator_contract(
+            estimator_version,
+            run_row["model_name"] or "",
+            persisted_contract=settings.get("prompt_estimator_contract"),
+        )
         budget = PromptBudgetConfig(
             num_ctx=settings.get("num_ctx", 8192),
             max_prompt_tokens=settings.get("max_prompt_tokens", 5632),
             num_predict=settings.get("num_predict", 1536),
             safety_margin=settings.get("safety_margin", 1024),
-            prompt_estimator_version=settings.get(
-                "prompt_estimator_version", "prompt-estimator-v2-utf8-13-over-40"
-            ),
+            prompt_estimator_version=estimator_version,
+            prompt_estimator_contract=estimator_contract,
             chunk_overlap_characters=settings.get("chunk_overlap_characters", 256),
             chunk_boundary_backtrack_characters=settings.get(
                 "chunk_boundary_backtrack_characters", 256
@@ -340,6 +359,13 @@ class JobStore:
             raise ValueError("Prompt-budgeted unit schema version mismatch")
         if manifest.get("prompt_estimator_version") != budget.prompt_estimator_version:
             raise ValueError("Prompt-budgeted unit estimator manifest mismatch")
+        expected_estimator_contract = (
+            budget.prompt_estimator_contract.as_manifest()
+            if budget.prompt_estimator_contract is not None
+            else None
+        )
+        if manifest.get("prompt_estimator_contract") != expected_estimator_contract:
+            raise ValueError("Prompt-budgeted unit tokenizer contract manifest mismatch")
         if manifest.get("prompt_budget_basis") != PROMPT_BUDGET_BASIS_ALL_SUPPORTED_ATTEMPTS:
             raise ValueError("Prompt-budgeted unit was not planned against all supported attempts")
 
@@ -355,6 +381,7 @@ class JobStore:
             reconstructed.content,
             list(reconstructed.event_ids),
             budget.prompt_estimator_version,
+            budget.prompt_estimator_contract,
         )
         if manifest.get("prompt_budget") != assessment.as_manifest():
             raise ValueError(

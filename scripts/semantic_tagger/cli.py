@@ -43,17 +43,22 @@ def _prompt_budget_from_args(args, strategy_version: str):
     from scripts.semantic_tagger.prompt_budget import (
         PROMPT_ESTIMATOR_VERSION,
         PromptBudgetConfig,
+        resolve_prompt_estimator_contract,
     )
 
     requested_num_predict = getattr(args, "num_predict", None)
+    estimator_version = getattr(args, "prompt_estimator_version", PROMPT_ESTIMATOR_VERSION)
+    estimator_contract = resolve_prompt_estimator_contract(
+        estimator_version,
+        getattr(args, "model", ""),
+    )
     return PromptBudgetConfig(
         num_ctx=getattr(args, "num_ctx", 8192),
         max_prompt_tokens=getattr(args, "max_prompt_tokens", 5632),
         num_predict=1536 if requested_num_predict is None else requested_num_predict,
         safety_margin=getattr(args, "safety_margin", 1024),
-        prompt_estimator_version=getattr(
-            args, "prompt_estimator_version", PROMPT_ESTIMATOR_VERSION
-        ),
+        prompt_estimator_version=estimator_version,
+        prompt_estimator_contract=estimator_contract,
         chunk_overlap_characters=getattr(args, "chunk_overlap_characters", 256),
         chunk_boundary_backtrack_characters=getattr(
             args, "chunk_boundary_backtrack_characters", 256
@@ -1235,12 +1240,16 @@ def cmd_plan_v3_dry_run(args):
 
     from scripts.semantic_tagger.planner_dry_run import write_dry_run_reports
 
+    strategy_version = "unit-v3-prompt-budgeted-chunks"
+    budget = _prompt_budget_from_args(args, strategy_version)
     data = write_dry_run_reports(
         main_db=Path(args.main_db),
         calibration_json=Path(args.calibration_json),
         comparison_sidecar=Path(args.comparison_sidecar),
         output_json=Path(args.output_json),
         output_markdown=Path(args.output_markdown),
+        budget=budget,
+        model_name=args.model,
     )
     corpus = data["corpus"]
     print(f"original_inferable_v2_units = {corpus['original_inferable_v2_units']}")
@@ -1398,6 +1407,7 @@ def main():
     parser_vocab.add_argument("--min-occurrences", type=int, default=1)
 
     parser_plan_v3 = subparsers.add_parser("plan-v3-dry-run")
+    parser_plan_v3.add_argument("--model", default="qwen3:14b")
     parser_plan_v3.add_argument("--main-db", default="data/mnemosyne.sqlite3")
     parser_plan_v3.add_argument(
         "--calibration-json",
@@ -1415,6 +1425,16 @@ def main():
         "--output-markdown",
         default="data/semantic_tagger_unit_v3_planner_dry_run.local.md",
     )
+    parser_plan_v3.add_argument("--num-ctx", type=int, default=8192)
+    parser_plan_v3.add_argument("--max-prompt-tokens", type=int, default=5632)
+    parser_plan_v3.add_argument("--num-predict", type=int, default=1536)
+    parser_plan_v3.add_argument("--safety-margin", type=int, default=1024)
+    parser_plan_v3.add_argument(
+        "--prompt-estimator-version",
+        default="prompt-estimator-v2-utf8-13-over-40",
+    )
+    parser_plan_v3.add_argument("--chunk-overlap-characters", type=int, default=256)
+    parser_plan_v3.add_argument("--chunk-boundary-backtrack-characters", type=int, default=256)
 
     parser_export = subparsers.add_parser("export-review")
     parser_export.add_argument("--output", required=True)

@@ -283,9 +283,14 @@ def build_dry_run_report(
     main_db: Path,
     calibration_json: Path,
     comparison_sidecar: Path,
+    budget: PromptBudgetConfig | None = None,
+    model_name: str = "qwen3:14b",
 ) -> dict[str, Any]:
+    from scripts.semantic_tagger.prompt_builder import PROMPT_MAP
+    from scripts.semantic_tagger.schemas import TaggerOutputV3ModelOutput
+
     calibration = json.loads(calibration_json.read_text(encoding="utf-8"))
-    budget = PromptBudgetConfig()
+    budget = budget or PromptBudgetConfig()
     planner = PromptBudgetUnitPlanner(
         prompt_version="semantic-hybrid-v3",
         schema_version="semantic-tags-v3",
@@ -321,7 +326,9 @@ def build_dry_run_report(
     range_errors = 0
     planning_failures: list[dict[str, str]] = []
     target_unit_hashes: dict[str, str] = {}
+    target_content_hash_owners: dict[str, str] = {}
     duplicate_target_unit_id_count = 0
+    content_hash_collision_count = 0
     deterministic = True
 
     with _connect_ro(main_db) as connection:
@@ -416,6 +423,11 @@ def build_dry_run_report(
                     duplicate_target_unit_id_count += 1
                 else:
                     target_unit_hashes[unit["unit_id"]] = unit["content_hash"]
+                previous_owner = target_content_hash_owners.get(unit["content_hash"])
+                if previous_owner is not None and previous_owner != unit["unit_id"]:
+                    content_hash_collision_count += 1
+                else:
+                    target_content_hash_owners[unit["content_hash"]] = unit["unit_id"]
             coverage = _coverage(selection["selected_events"], first)
             coverage_errors += coverage["coverage_errors"]
             range_errors += coverage["range_errors"]
@@ -439,6 +451,8 @@ def build_dry_run_report(
 
     if duplicate_target_unit_id_count:
         raise ValueError("Production-parity dry-run produced duplicate target unit IDs")
+    if content_hash_collision_count:
+        raise ValueError("Production-parity dry-run produced content-hash collisions")
 
     return {
         "report_version": "semantic-tagger-unit-v3-planner-dry-run-v2",
@@ -453,9 +467,24 @@ def build_dry_run_report(
             "main_db_sha256": _sha256_file(main_db),
             "calibration_json_sha256": _sha256_file(calibration_json),
             "comparison_sidecar_sha256": _sha256_file(comparison_sidecar),
+            "prompt_template_sha256": _sha256_file(Path(PROMPT_MAP["semantic-hybrid-v3"])),
+            "prompt_builder_sha256": _sha256_file(Path(__file__).with_name("prompt_builder.py")),
+            "prompt_estimator_module_sha256": _sha256_file(
+                Path(__file__).with_name("prompt_budget.py")
+            ),
+            "exact_tokenizer_module_sha256": _sha256_file(
+                Path(__file__).with_name("qwen3_tokenizer.py")
+            ),
+            "exported_json_schema_pretty_sha256": hashlib.sha256(
+                json.dumps(
+                    TaggerOutputV3ModelOutput.model_json_schema(),
+                    indent=2,
+                ).encode("utf-8")
+            ).hexdigest(),
             "sqlite_policy": "URI mode=ro and PRAGMA query_only=ON",
         },
         "strategy": {
+            "model_name": model_name,
             "strategy_version": "unit-v3-prompt-budgeted-chunks",
             "source_manifest_planning_contract": "context-ordered-union-plan-once",
             "source_manifest_inferable_rule": "v2 tagging_unit.character_count > 0",
@@ -486,6 +515,7 @@ def build_dry_run_report(
             "unique_target_unit_count": len(target_unit_hashes),
             "simulated_unique_target_job_count": len(target_unit_hashes),
             "duplicate_target_unit_id_count": duplicate_target_unit_id_count,
+            "content_hash_collision_count": content_hash_collision_count,
             "whole_event_units": whole_event_units,
             "chunk_only_units": chunk_only_units,
             "source_events_requiring_chunking": len(source_events_chunked),
@@ -579,6 +609,7 @@ def render_markdown(data: dict[str, Any]) -> str:
         f"- Unique target units / simulated jobs: {corpus['unique_target_unit_count']} / "
         f"{corpus['simulated_unique_target_job_count']}; duplicate IDs: "
         f"{corpus['duplicate_target_unit_id_count']}.",
+        f"- Content-hash collisions: {corpus['content_hash_collision_count']}.",
         f"- Oversized source events: {corpus['source_events_requiring_chunking']}; "
         f"chunks: {corpus['total_chunks']}; contexts: "
         f"{corpus['contexts_containing_chunked_events']}.",
@@ -682,6 +713,8 @@ def write_dry_run_reports(
     comparison_sidecar: Path,
     output_json: Path,
     output_markdown: Path,
+    budget: PromptBudgetConfig | None = None,
+    model_name: str = "qwen3:14b",
 ) -> dict[str, Any]:
     if output_json.exists() or output_markdown.exists():
         raise FileExistsError("Dry-run report output already exists; refusing to overwrite")
@@ -689,6 +722,8 @@ def write_dry_run_reports(
         main_db=main_db,
         calibration_json=calibration_json,
         comparison_sidecar=comparison_sidecar,
+        budget=budget,
+        model_name=model_name,
     )
     output_json.write_text(
         json.dumps(data, ensure_ascii=False, indent=2) + "\n",

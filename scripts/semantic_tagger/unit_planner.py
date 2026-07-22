@@ -449,6 +449,7 @@ class PromptBudgetUnitPlanner:
             canonical_content,
             event_ids,
             self.budget.prompt_estimator_version,
+            self.budget.prompt_estimator_contract,
         )
         return manifest, canonical_content, assessment
 
@@ -458,7 +459,7 @@ class PromptBudgetUnitPlanner:
         segments: list[_SegmentInput],
         title: str,
     ) -> dict[str, Any]:
-        return {
+        manifest = {
             "title_included": bool(title),
             "title_source": context_id,
             "unit_strategy_version": self.strategy_version,
@@ -485,6 +486,11 @@ class PromptBudgetUnitPlanner:
             ],
             "oversized_single_event": any(segment.is_chunk for segment in segments),
         }
+        if self.budget.prompt_estimator_contract is not None:
+            manifest["prompt_estimator_contract"] = (
+                self.budget.prompt_estimator_contract.as_manifest()
+            )
+        return manifest
 
     def _prepare_unit(
         self,

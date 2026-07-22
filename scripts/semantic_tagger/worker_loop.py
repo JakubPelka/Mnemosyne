@@ -1,11 +1,29 @@
 import time
 import threading
 import sqlite3
+import json
 
 from scripts.semantic_tagger.job_store import JobStore, JobExecutionContext, LeaseLostError
 from scripts.semantic_tagger.ollama_client import OllamaClient
 from scripts.semantic_tagger.worker import Worker
 from scripts.semantic_tagger.content_loader import load_and_reconstruct_unit
+
+
+def validate_worker_prompt_estimator_contract(run_row) -> None:
+    """Fail closed before worker registration when an exact contract has drifted."""
+    if run_row["unit_strategy_version"] != "unit-v3-prompt-budgeted-chunks":
+        return
+    from scripts.semantic_tagger.prompt_budget import resolve_prompt_estimator_contract
+
+    settings = json.loads(run_row["settings_json"] or "{}")
+    resolve_prompt_estimator_contract(
+        settings.get(
+            "prompt_estimator_version",
+            "prompt-estimator-v2-utf8-13-over-40",
+        ),
+        run_row["model_name"] or "",
+        persisted_contract=settings.get("prompt_estimator_contract"),
+    )
 
 
 class HeartbeatThread(threading.Thread):
@@ -100,6 +118,12 @@ def run_worker_loop(
             print(
                 f"Model mismatch. Run requires {run_row['model_name']}, but worker provided {model_name}"
             )
+            return
+
+        try:
+            validate_worker_prompt_estimator_contract(run_row)
+        except ValueError as error:
+            print(f"Worker prompt-estimator contract validation failed: {error}")
             return
 
         # Check for other active workers atomically using a transaction
