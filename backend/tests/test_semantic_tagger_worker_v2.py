@@ -59,10 +59,10 @@ class DummyClient(OllamaClient):
         return self.result
 
 
-def test_done_reason_length_is_truncated():
+def test_done_reason_length_is_truncated(tmp_path):
     store = DummyStore()
     client = DummyClient(result=OllamaGenerationResult("{}", 10, 20, 100, "length"))
-    worker = Worker(store, client)
+    worker = Worker(store, client, vocabulary_db_path=tmp_path / "vocabulary.sqlite3")
     job = {
         "job_id": "j1",
         "attempt_count": 1,
@@ -80,10 +80,10 @@ def test_done_reason_length_is_truncated():
     assert store.metadata[0] == ("a1", "j1", "l1", 100, 10, 20, "length")
 
 
-def test_completion_tokens_exceed_is_truncated():
+def test_completion_tokens_exceed_is_truncated(tmp_path):
     store = DummyStore()
     client = DummyClient(result=OllamaGenerationResult("{}", 10, 4096, 100, "stop"))
-    worker = Worker(store, client)
+    worker = Worker(store, client, vocabulary_db_path=tmp_path / "vocabulary.sqlite3")
     job = {
         "job_id": "j1",
         "attempt_count": 1,
@@ -101,10 +101,10 @@ def test_completion_tokens_exceed_is_truncated():
     assert store.metadata[0] == ("a1", "j1", "l1", 100, 10, 4096, "stop")
 
 
-def test_malformed_json_below_limit_is_invalid_json():
+def test_malformed_json_below_limit_is_invalid_json(tmp_path):
     store = DummyStore()
     client = DummyClient(result=OllamaGenerationResult("{bad json", 10, 20, 100, "stop"))
-    worker = Worker(store, client)
+    worker = Worker(store, client, vocabulary_db_path=tmp_path / "vocabulary.sqlite3")
     job = {
         "job_id": "j1",
         "attempt_count": 1,
@@ -122,10 +122,10 @@ def test_malformed_json_below_limit_is_invalid_json():
     assert store.metadata[0] == ("a1", "j1", "l1", 100, 10, 20, "stop")
 
 
-def test_api_failure_is_ollama_error():
+def test_api_failure_is_ollama_error(tmp_path):
     store = DummyStore()
     client = DummyClient(error=OllamaError("api timeout"))
-    worker = Worker(store, client)
+    worker = Worker(store, client, vocabulary_db_path=tmp_path / "vocabulary.sqlite3")
     job = {
         "job_id": "j1",
         "attempt_count": 1,

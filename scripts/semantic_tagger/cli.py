@@ -783,10 +783,30 @@ def get_active_run_id():
 def cmd_worker(args):
     from scripts.semantic_tagger.worker_loop import run_worker_loop
     from scripts.semantic_tagger.job_store import JobStore
-    from pathlib import Path
+    from scripts.semantic_tagger.runtime_paths import (
+        WorkerRuntimePathError,
+        validate_worker_sidecar_path,
+        validate_worker_runtime_paths,
+    )
 
-    store = JobStore(Path(args.db_path)) if getattr(args, "db_path", None) else None
-    run_worker_loop(args.model, args.run_id, args.max_claims, args.target_done, store=store)
+    try:
+        sidecar_path = validate_worker_sidecar_path(args.db_path, args.run_id)
+        runtime_paths = validate_worker_runtime_paths(args.main_db, args.vocabulary_db)
+    except WorkerRuntimePathError as error:
+        raise SystemExit(f"Worker runtime preflight failed: {error}") from error
+
+    store = JobStore(sidecar_path)
+    run_worker_loop(
+        args.model,
+        target_run_id=args.run_id,
+        max_claims=args.max_claims,
+        target_done=args.target_done,
+        target_terminal=args.target_terminal,
+        store=store,
+        main_db_path=runtime_paths.main_db_path,
+        vocabulary_db_path=runtime_paths.vocabulary_db_path,
+        runtime_paths=runtime_paths,
+    )
 
 
 def cmd_pause(args):
@@ -1355,14 +1375,33 @@ def main():
         type=int,
         help=argparse.SUPPRESS,
     )
-    parser_worker.add_argument(
+    worker_target_group = parser_worker.add_mutually_exclusive_group()
+    worker_target_group.add_argument(
         "--target-done",
         type=int,
         default=0,
         help="Exit when this run reaches the requested total number of done jobs",
     )
+    worker_target_group.add_argument(
+        "--target-terminal",
+        type=int,
+        default=0,
+        help="Exit when this run reaches the requested total number of done plus failed jobs",
+    )
     parser_worker.add_argument("--run-id", type=str, required=True, help="Run ID to bind to")
-    parser_worker.add_argument("--db-path", type=str, help="Custom db path")
+    parser_worker.add_argument("--db-path", type=str, required=True, help="Sidecar database path")
+    parser_worker.add_argument(
+        "--main-db",
+        type=str,
+        required=True,
+        help="Canonical main database path (opened read-only)",
+    )
+    parser_worker.add_argument(
+        "--vocabulary-db",
+        type=str,
+        required=True,
+        help="Isolated writable vocabulary database path",
+    )
 
     parser_pause = subparsers.add_parser("pause")
     parser_pause.add_argument("--db-path", default="data/semantic_tagger.local.sqlite3")

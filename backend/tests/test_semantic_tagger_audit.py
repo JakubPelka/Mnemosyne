@@ -22,6 +22,7 @@ def test_db_paths(tmp_path):
         conn.execute(
             "CREATE TABLE events (event_id TEXT, context_id TEXT, title TEXT, text TEXT, timestamp_start TEXT, event_type TEXT)"
         )
+        conn.execute("CREATE TABLE chatgpt_messages (event_id TEXT, role TEXT)")
         conn.commit()
 
     import scripts.semantic_tagger.content_loader
@@ -29,6 +30,20 @@ def test_db_paths(tmp_path):
     scripts.semantic_tagger.content_loader.MAIN_DB_URI = f"file:{main_db}?mode=ro"
 
     return main_db, sidecar_db
+
+
+def create_worker_runtime_paths(tmp_path):
+    main_db = tmp_path / "worker-main.sqlite3"
+    with sqlite3.connect(main_db) as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS events (event_id TEXT, context_id TEXT, title TEXT, text TEXT, "
+            "timestamp_start TEXT, event_type TEXT)"
+        )
+        conn.execute("CREATE TABLE IF NOT EXISTS chatgpt_messages (event_id TEXT, role TEXT)")
+    return {
+        "main_db_path": main_db,
+        "vocabulary_db_path": tmp_path / "worker-vocabulary.sqlite3",
+    }
 
 
 def test_secret_title_absent_from_sidecar(test_db_paths):
@@ -166,7 +181,11 @@ def test_audit_retry_numbering(test_db_paths):
         )
         conn.commit()
 
-    worker = Worker(store, MockClient())
+    worker = Worker(
+        store,
+        MockClient(),
+        vocabulary_db_path=sidecar_db.with_name("worker-vocabulary.sqlite3"),
+    )
 
     class MockUnit:
         contains_code = False
@@ -256,7 +275,14 @@ def test_max_claims_and_isolation(test_db_paths):
         ),
     ):
         # max_claims = 2
-        run_worker_loop("test_model", target_run_id=run_id, max_claims=2, store=store)
+        run_worker_loop(
+            "test_model",
+            target_run_id=run_id,
+            max_claims=2,
+            store=store,
+            main_db_path=main_db,
+            vocabulary_db_path=sidecar_db.parent / "worker-vocabulary.sqlite3",
+        )
 
         # Check jobs
         with sqlite3.connect(store.db_path) as conn:
@@ -291,7 +317,14 @@ def test_worker_lock(test_db_paths):
     old_stdout = sys.stdout
     sys.stdout = io.StringIO()
     try:
-        run_worker_loop("test_model", target_run_id=run_id, max_claims=1, store=store)
+        run_worker_loop(
+            "test_model",
+            target_run_id=run_id,
+            max_claims=1,
+            store=store,
+            main_db_path=main_db,
+            vocabulary_db_path=sidecar_db.parent / "worker-vocabulary.sqlite3",
+        )
     finally:
         out = sys.stdout.getvalue()
         sys.stdout = old_stdout
@@ -374,7 +407,13 @@ def test_max_claims_counts_claims_not_loop_iterations(tmp_path):
             return orig_claim(*args)
 
         with mock.patch.object(store, "claim_next_job", side_effect=fake_claim):
-            run_worker_loop("qwen3:14b", target_run_id=run_id, max_claims=2, store=store)
+            run_worker_loop(
+                "qwen3:14b",
+                target_run_id=run_id,
+                max_claims=2,
+                store=store,
+                **create_worker_runtime_paths(tmp_path),
+            )
 
         assert worker_instance.run_one.call_count == 2
         assert mock_sleep.call_count >= 1
@@ -407,7 +446,13 @@ def test_target_done_counts_successes_for_selected_run(tmp_path):
         mock.patch("scripts.semantic_tagger.worker_loop.load_and_reconstruct_unit"),
     ):
         MockWorker.return_value.run_one.return_value = True
-        run_worker_loop("qwen3:14b", target_run_id=run_id, target_done=1, store=store)
+        run_worker_loop(
+            "qwen3:14b",
+            target_run_id=run_id,
+            target_done=1,
+            store=store,
+            **create_worker_runtime_paths(tmp_path),
+        )
         assert MockWorker.return_value.run_one.call_count == 0
 
 
@@ -447,7 +492,13 @@ def test_failed_job_requires_explicit_retry(tmp_path):
 
         MockWorker.return_value = worker_inst
 
-        run_worker_loop("qwen3:14b", target_run_id=run_id, max_claims=1, store=store)
+        run_worker_loop(
+            "qwen3:14b",
+            target_run_id=run_id,
+            max_claims=1,
+            store=store,
+            **create_worker_runtime_paths(tmp_path),
+        )
 
     with sqlite3.connect(store.db_path) as conn:
         row = conn.execute("SELECT status FROM tagging_job WHERE job_id = 'j1'").fetchone()
@@ -461,7 +512,13 @@ def test_failed_job_requires_explicit_retry(tmp_path):
     ):
         # We raise InterruptedError on sleep to break the loop since it would just poll forever
         try:
-            run_worker_loop("qwen3:14b", target_run_id=run_id, max_claims=1, store=store)
+            run_worker_loop(
+                "qwen3:14b",
+                target_run_id=run_id,
+                max_claims=1,
+                store=store,
+                **create_worker_runtime_paths(tmp_path),
+            )
         except InterruptedError:
             pass
         assert MockWorker2.return_value.run_one.call_count == 0
@@ -487,7 +544,13 @@ def test_no_job_available_does_not_consume_claim(tmp_path):
     ):
         mock_sleep.side_effect = InterruptedError
         try:
-            run_worker_loop("qwen3:14b", target_run_id=run_id, max_claims=1, store=store)
+            run_worker_loop(
+                "qwen3:14b",
+                target_run_id=run_id,
+                max_claims=1,
+                store=store,
+                **create_worker_runtime_paths(tmp_path),
+            )
         except InterruptedError:
             pass
         assert MockWorker.return_value.run_one.call_count == 0
@@ -552,7 +615,7 @@ def test_heartbeat_uses_configured_sidecar(tmp_path):
     heartbeat = HeartbeatThread(store, run_id, "w1")
 
     # Run a single loop using mock
-    with mock.patch("time.sleep", side_effect=InterruptedError):
+    with mock.patch.object(heartbeat._stop_event, "wait", side_effect=InterruptedError):
         try:
             heartbeat.run()
         except InterruptedError:
@@ -610,7 +673,11 @@ def test_worker_passes_generation_settings_to_client(tmp_path):
     from scripts.semantic_tagger.ollama_client import OllamaGenerationResult
 
     client.generate_tags.return_value = OllamaGenerationResult("{}", 10, 10, 100, "stop")
-    worker = Worker(store, client)
+    worker = Worker(
+        store,
+        client,
+        vocabulary_db_path=tmp_path / "worker-vocabulary.sqlite3",
+    )
     store.complete_job = mock.MagicMock()
     store.fail_job = mock.MagicMock()
     store.record_attempt_response_metadata = mock.MagicMock()
@@ -731,7 +798,11 @@ def test_truncated_response_is_failed_as_output_truncated(tmp_path):
     from scripts.semantic_tagger.ollama_client import OllamaGenerationResult
 
     client.generate_tags.return_value = OllamaGenerationResult("{}", 10, 4096, 100, "length")
-    worker = Worker(store, client)
+    worker = Worker(
+        store,
+        client,
+        vocabulary_db_path=tmp_path / "worker-vocabulary.sqlite3",
+    )
     store.complete_job = mock.MagicMock()
 
     store.record_attempt_response_metadata = mock.MagicMock()

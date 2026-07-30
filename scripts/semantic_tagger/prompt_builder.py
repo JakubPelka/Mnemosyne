@@ -11,6 +11,7 @@ PROMPT_MAP = {
     "semantic-hybrid-v2": "prompts/semantic_hybrid_v2.md",
     "semantic-hybrid-v3": "prompts/semantic_hybrid_v3.md",
 }
+PROMPT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class PromptBuildResult(BaseModel):
@@ -51,7 +52,7 @@ SUPPORTED_PROMPT_VARIANTS = (
 
 @lru_cache(maxsize=len(PROMPT_MAP))
 def _rendered_prompt_template(prompt_version: str) -> str:
-    prompt_path = Path(PROMPT_MAP[prompt_version])
+    prompt_path = PROMPT_ROOT / PROMPT_MAP[prompt_version]
     if not prompt_path.exists():
         raise FileNotFoundError(f"Missing prompt file: {prompt_path}")
 

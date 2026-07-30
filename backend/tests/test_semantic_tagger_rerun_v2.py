@@ -239,8 +239,15 @@ def test_worker_cli_exposes_claim_and_completion_limits(tmp_path):
     assert "--run-id" in res.stdout
     assert "--max-claims" in res.stdout
     assert "--target-done" in res.stdout
+    assert "--target-terminal" in res.stdout
+    assert "--main-db" in res.stdout
+    assert "--vocabulary-db" in res.stdout
 
     # Test parser accepting 10 and 10
+    main_db = tmp_path / "main.sqlite3"
+    with sqlite3.connect(main_db) as conn:
+        conn.execute("CREATE TABLE events (event_id TEXT)")
+        conn.execute("CREATE TABLE chatgpt_messages (event_id TEXT)")
     cmd_parse = [
         sys.executable,
         "-m",
@@ -248,6 +255,12 @@ def test_worker_cli_exposes_claim_and_completion_limits(tmp_path):
         "worker",
         "--run-id",
         "test_id",
+        "--db-path",
+        str(tmp_path / "sidecar.sqlite3"),
+        "--main-db",
+        str(main_db),
+        "--vocabulary-db",
+        str(tmp_path / "vocabulary.sqlite3"),
         "--max-claims",
         "10",
         "--target-done",

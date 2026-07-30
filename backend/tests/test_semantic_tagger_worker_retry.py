@@ -61,7 +61,11 @@ def test_first_facets_missing_transitions_to_pending_and_persists_reason(store):
         mock_build.return_value = MagicMock(
             prompt="prompt", evidence_alias_to_event_id={"E1": "e1"}
         )
-        worker = Worker(job_store, mock_client)
+        worker = Worker(
+            job_store,
+            mock_client,
+            vocabulary_db_path=job_store.db_path.with_name("worker-vocabulary.sqlite3"),
+        )
         success = worker.run_one(job, DummyUnit())
         assert not success
 
@@ -98,7 +102,11 @@ def test_second_facets_missing_transitions_to_failed(store):
         mock_build.return_value = MagicMock(
             prompt="prompt", evidence_alias_to_event_id={"E1": "e1"}
         )
-        worker = Worker(job_store, mock_client)
+        worker = Worker(
+            job_store,
+            mock_client,
+            vocabulary_db_path=job_store.db_path.with_name("worker-vocabulary.sqlite3"),
+        )
         worker.run_one(job1, DummyUnit())
 
     # Attempt 2
@@ -132,7 +140,11 @@ def test_non_retry_validation_failure_becomes_failed(store):
         mock_build.return_value = MagicMock(
             prompt="prompt", evidence_alias_to_event_id={"E1": "e1"}
         )
-        worker = Worker(job_store, mock_client)
+        worker = Worker(
+            job_store,
+            mock_client,
+            vocabulary_db_path=job_store.db_path.with_name("worker-vocabulary.sqlite3"),
+        )
         worker.run_one(job, DummyUnit())
 
     with sqlite3.connect(job_store.db_path) as conn:
@@ -169,7 +181,11 @@ def test_successful_v3_output_becomes_done(
         mock_build.return_value = MagicMock(
             prompt="prompt", evidence_alias_to_event_id={"E1": "e1"}
         )
-        worker = Worker(job_store, mock_client)
+        worker = Worker(
+            job_store,
+            mock_client,
+            vocabulary_db_path=isolate_semantic_vocabulary,
+        )
         success = worker.run_one(job, DummyUnit())
         assert success
 

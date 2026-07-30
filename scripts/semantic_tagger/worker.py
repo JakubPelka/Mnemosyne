@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from scripts.semantic_tagger.job_store import JobStore, LeaseLostError
 from scripts.semantic_tagger.ollama_client import OllamaClient, OllamaError
 from scripts.semantic_tagger.privacy import safe_hash
@@ -26,9 +27,16 @@ def build_worker_final_prompt(job: dict, unit):
 
 
 class Worker:
-    def __init__(self, job_store: JobStore, ollama_client: OllamaClient):
+    def __init__(
+        self,
+        job_store: JobStore,
+        ollama_client: OllamaClient,
+        *,
+        vocabulary_db_path: Path,
+    ):
         self.store = job_store
         self.client = ollama_client
+        self.vocabulary_db_path = vocabulary_db_path
 
     def run_one(self, job: dict, unit, ctx=None) -> bool:
         job_id = job["job_id"]
@@ -298,7 +306,7 @@ class Worker:
             try:
                 from scripts.semantic_tagger.vocabulary_store import VocabularyStore
 
-                vocab_store = VocabularyStore()
+                vocab_store = VocabularyStore(self.vocabulary_db_path)
                 if schema_version == "semantic-tags-v3":
                     vocab_store.update_from_tagger_output_v3(
                         output, unit.unit_id, job["run_id"], job_id

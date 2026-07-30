@@ -7,7 +7,7 @@ Type=simple
 WorkingDirectory=__MNEMOSYNE_REPO__
 Environment=PYTHONUNBUFFERED=1
 Environment=OLLAMA_HOST=http://127.0.0.1:11434
-ExecStart=__MNEMOSYNE_REPO__/.venv/bin/python -m scripts.semantic_tagger.cli worker --model qwen3:14b
+ExecStart=__MNEMOSYNE_REPO__/.venv/bin/python -m scripts.semantic_tagger.cli worker --model qwen3:14b --run-id __RUN_ID__ --db-path __SEMANTIC_SIDECAR__ --main-db __MNEMOSYNE_REPO__/data/mnemosyne.sqlite3 --vocabulary-db __VOCABULARY_DB__
 Restart=on-failure
 RestartSec=15
 TimeoutStopSec=660

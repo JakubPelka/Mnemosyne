@@ -241,7 +241,7 @@ class _SyntheticUnit:
     unit_id = "unit-1"
 
 
-def test_malformed_concept_label_remains_a_validation_error():
+def test_malformed_concept_label_remains_a_validation_error(tmp_path):
     response = _model_payload("123")
     client = MagicMock()
     client.generate_tags.return_value = OllamaGenerationResult(
@@ -263,7 +263,11 @@ def test_malformed_concept_label_remains_a_validation_error():
             prompt="synthetic prompt",
             evidence_alias_to_event_id={"E1": "event-1"},
         )
-        succeeded = Worker(store, client).run_one(job, _SyntheticUnit())
+        succeeded = Worker(
+            store,
+            client,
+            vocabulary_db_path=tmp_path / "worker-vocabulary.sqlite3",
+        ).run_one(job, _SyntheticUnit())
 
     assert not succeeded
     assert store.error_code == "validation_error"

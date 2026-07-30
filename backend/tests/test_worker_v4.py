@@ -64,7 +64,11 @@ def test_persistence_failed_response(store, isolate_semantic_vocabulary):
         mock_build.return_value = MagicMock(
             prompt="prompt", evidence_alias_to_event_id={"E1": "e1"}
         )
-        worker = Worker(job_store, mock_client)
+        worker = Worker(
+            job_store,
+            mock_client,
+            vocabulary_db_path=isolate_semantic_vocabulary,
+        )
         worker.run_one(job, DummyUnit())
 
     with sqlite3.connect(job_store.db_path) as conn:
@@ -104,7 +108,11 @@ def test_persistence_successful_response(
         mock_build.return_value = MagicMock(
             prompt="prompt", evidence_alias_to_event_id={"E1": "e1"}
         )
-        worker = Worker(job_store, mock_client)
+        worker = Worker(
+            job_store,
+            mock_client,
+            vocabulary_db_path=isolate_semantic_vocabulary,
+        )
         worker.run_one(job, DummyUnit())
 
     with sqlite3.connect(job_store.db_path) as conn:
@@ -148,7 +156,11 @@ def test_persistence_oversized_response(store):
         mock_build.return_value = MagicMock(
             prompt="prompt", evidence_alias_to_event_id={"E1": "e1"}
         )
-        worker = Worker(job_store, mock_client)
+        worker = Worker(
+            job_store,
+            mock_client,
+            vocabulary_db_path=job_store.db_path.with_name("worker-vocabulary.sqlite3"),
+        )
         worker.run_one(job, DummyUnit())
 
     with sqlite3.connect(job_store.db_path) as conn:
@@ -178,7 +190,11 @@ def test_exact_schema_reaches_ollama(store):
         mock_build.return_value = MagicMock(
             prompt="prompt", evidence_alias_to_event_id={"E1": "e1"}
         )
-        worker = Worker(job_store, mock_client)
+        worker = Worker(
+            job_store,
+            mock_client,
+            vocabulary_db_path=job_store.db_path.with_name("worker-vocabulary.sqlite3"),
+        )
         worker.run_one(job, DummyUnit())
 
     # Assert exact generated schema reaches the format parameter
@@ -202,7 +218,11 @@ def test_mixed_validation_error_is_not_facets_missing(store):
         mock_build.return_value = MagicMock(
             prompt="prompt", evidence_alias_to_event_id={"E1": "e1"}
         )
-        worker = Worker(job_store, mock_client)
+        worker = Worker(
+            job_store,
+            mock_client,
+            vocabulary_db_path=job_store.db_path.with_name("worker-vocabulary.sqlite3"),
+        )
         worker.run_one(job, DummyUnit())
 
     with sqlite3.connect(job_store.db_path) as conn:
@@ -231,7 +251,11 @@ def test_unrelated_validation_error_is_not_facets_missing(store):
         mock_build.return_value = MagicMock(
             prompt="prompt", evidence_alias_to_event_id={"E1": "e1"}
         )
-        worker = Worker(job_store, mock_client)
+        worker = Worker(
+            job_store,
+            mock_client,
+            vocabulary_db_path=job_store.db_path.with_name("worker-vocabulary.sqlite3"),
+        )
         worker.run_one(job, DummyUnit())
 
     with sqlite3.connect(job_store.db_path) as conn:
