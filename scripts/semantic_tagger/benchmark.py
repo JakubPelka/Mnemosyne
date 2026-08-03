@@ -19,7 +19,7 @@ import sqlite3
 import subprocess
 import unicodedata
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
@@ -55,6 +55,8 @@ LOCAL_ARTIFACT_ROOT = Path(".local/semantic_tagger_benchmark")
 SAFE_MANIFEST_PATH = LOCAL_ARTIFACT_ROOT / "manifest.local.json"
 INVENTORY_PATH = LOCAL_ARTIFACT_ROOT / "inventory/sanitized_inventory.local.json"
 INVENTORY_VERSION = "semantic-tagger-sidecar-inventory-v1"
+HISTORICAL_EVIDENCE_PATH = LOCAL_ARTIFACT_ROOT / "evidence/historical_evidence_inventory.local.json"
+HISTORICAL_EVIDENCE_VERSION = "semantic-tagger-historical-evidence-inventory-v1"
 HUMAN_REVIEW_PREVIEW_VERSION = "semantic-tagger-human-review-preview-v1"
 COMPATIBLE_REASON_CODE = "compatible_frozen_semantic_hybrid_v3_contract"
 TERMINAL_JOB_STATUSES = ("done", "failed")
@@ -963,6 +965,7 @@ def _historical_output_diagnostics(row: sqlite3.Row) -> dict[str, Any]:
     labels = [label for label in labels if label]
     counts = Counter(labels)
     return {
+        "concept_count": len(concepts),
         "relation_count": len(relations),
         "relation_evidence_count": relation_evidence_count,
         "historically_empty": row["status"] == "done" and not concepts,
@@ -1113,6 +1116,598 @@ def load_benchmark_candidates(
             )
         )
     return contract, candidates
+
+
+def _stored_lineage_signature(row: Mapping[str, Any]) -> tuple[tuple[Any, ...], ...] | None:
+    try:
+        manifest = json.loads(row.get("segments_json") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return None
+    segments = manifest.get("segments") if isinstance(manifest, dict) else None
+    if isinstance(segments, list) and segments:
+        signature = []
+        for segment in segments:
+            if not isinstance(segment, dict) or not isinstance(segment.get("event_id"), str):
+                return None
+            start = segment.get("start_char", 0)
+            end = segment.get("end_char")
+            if not isinstance(start, int) or (end is not None and not isinstance(end, int)):
+                return None
+            signature.append((segment["event_id"], start, end))
+        return tuple(signature)
+    try:
+        event_ids = json.loads(row.get("event_ids_json") or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(event_ids, list) or not event_ids:
+        return None
+    if not all(isinstance(event_id, str) and event_id for event_id in event_ids):
+        return None
+    return tuple((event_id, None, None) for event_id in event_ids)
+
+
+def _protected_database_state(path: Path, secret_salt: bytes) -> tuple[Path, dict[str, Any]]:
+    if path.is_symlink():
+        raise BenchmarkError("Protected database must not be a symbolic link")
+    resolved = _resolved_sqlite_path(path)
+    companions = _companion_states(resolved)
+    if _runtime_preflight_reason_codes(resolved):
+        raise BenchmarkError("Protected database has an unsafe runtime state")
+    source_hash = file_sha256(resolved)
+    with contextlib.closing(open_sqlite_immutable(resolved)) as connection:
+        integrity_rows = connection.execute("PRAGMA integrity_check").fetchall()
+    if len(integrity_rows) != 1 or integrity_rows[0][0] != "ok":
+        raise BenchmarkError("Protected database failed its integrity check")
+    final_companions = _companion_states(resolved)
+    if final_companions != companions or file_sha256(resolved) != source_hash:
+        raise BenchmarkError("Protected database changed during verification")
+    return resolved, {
+        "opaque_source_id": opaque_hash(secret_salt, "protected-database", source_hash),
+        "sha256": source_hash,
+        "sqlite_integrity": "ok",
+        "companion_files": companions,
+    }
+
+
+def _safe_provenance_code(value: Any) -> str:
+    return _safe_metadata_identifier(value) or "invalid_metadata_code"
+
+
+def _historical_record_mapping(
+    row: Mapping[str, Any],
+    *,
+    by_unit_lineage: Mapping[tuple[Any, ...], list[str]],
+    by_content_hash: Mapping[tuple[Any, ...], list[str]],
+    by_lineage: Mapping[tuple[Any, ...], list[str]],
+    by_context: Mapping[str, list[str]],
+) -> tuple[str | None, str]:
+    context_id = row.get("context_id")
+    if not isinstance(context_id, str) or not context_id:
+        return None, "historical_lineage_missing"
+    lineage = _stored_lineage_signature(row)
+    checks = (
+        (
+            "historical_lineage_exact_unit",
+            by_unit_lineage.get((context_id, row.get("unit_id"), lineage), []) if lineage else [],
+        ),
+        (
+            "historical_lineage_exact_content_hash",
+            by_content_hash.get((context_id, row.get("content_hash")), []),
+        ),
+        (
+            "historical_lineage_exact_segments",
+            by_lineage.get((context_id, lineage), []) if lineage else [],
+        ),
+        (
+            "historical_lineage_unique_current_context",
+            by_context.get(context_id, []) if len(by_context.get(context_id, [])) == 1 else [],
+        ),
+    )
+    for reason_code, matches in checks:
+        if len(matches) == 1:
+            return matches[0], reason_code
+    return None, "historical_lineage_unmapped_or_ambiguous"
+
+
+def _historical_evidence_configuration_hash() -> str:
+    return sha256_json(
+        {
+            "version": HISTORICAL_EVIDENCE_VERSION,
+            "current_contract_reason": COMPATIBLE_REASON_CODE,
+            "validated_stored_schema": SCHEMA_VERSION,
+            "validated_stored_model": "TaggerOutputV3Stored",
+            "semantic_rejection_codes": sorted(_VALIDATION_REJECTION_CODES),
+            "category_priority": CATEGORY_PRIORITY,
+            "category_definitions_version": SELECTOR_VERSION,
+            "generic_label_version": GENERIC_LABEL_VERSION,
+            "mapping_priority": [
+                "historical_lineage_exact_unit",
+                "historical_lineage_exact_content_hash",
+                "historical_lineage_exact_segments",
+                "historical_lineage_unique_current_context",
+            ],
+        }
+    )
+
+
+def audit_historical_evidence(
+    *,
+    repo_root: Path,
+    sidecar_allowlist: Sequence[Path],
+    protected_databases: Sequence[Path],
+    secret_salt: bytes,
+    inventory_path: Path = INVENTORY_PATH,
+    output_path: Path = HISTORICAL_EVIDENCE_PATH,
+) -> dict[str, Any]:
+    """Audit stored semantic evidence without selecting or reconstructing payloads."""
+    try:
+        root = repo_root.resolve(strict=True)
+    except OSError:
+        raise BenchmarkError("Repository root must be an existing directory") from None
+    requested_inventory = inventory_path if inventory_path.is_absolute() else root / inventory_path
+    requested_output = output_path if output_path.is_absolute() else root / output_path
+    expected_inventory = (root / INVENTORY_PATH).resolve(strict=False)
+    expected_output = (root / HISTORICAL_EVIDENCE_PATH).resolve(strict=False)
+    if requested_inventory.resolve(strict=False) != expected_inventory:
+        raise BenchmarkError("The sanitized inventory path is fixed by the contract")
+    if requested_output.resolve(strict=False) != expected_output:
+        raise BenchmarkError("The historical evidence output path is fixed by the contract")
+    output = verify_ignored_local_output(root, expected_output)
+    if output.exists() or output.is_symlink():
+        raise BenchmarkError("Historical evidence audit refuses to overwrite an artifact")
+    try:
+        inventory_bytes = expected_inventory.read_bytes()
+        stored_inventory = json.loads(inventory_bytes)
+    except (OSError, json.JSONDecodeError):
+        raise BenchmarkError("Sanitized sidecar inventory is unreadable") from None
+    if (
+        not isinstance(stored_inventory, dict)
+        or stored_inventory.get("inventory_version") != INVENTORY_VERSION
+        or not isinstance(stored_inventory.get("sources"), list)
+    ):
+        raise BenchmarkError("Sanitized sidecar inventory has an unsupported structure")
+
+    protected_before = [
+        _protected_database_state(path, secret_salt) for path in protected_databases
+    ]
+    if not protected_before:
+        raise BenchmarkError("At least one protected database is required")
+    if len({str(path) for path, _ in protected_before}) != len(protected_before):
+        raise BenchmarkError("Protected database allowlist contains a duplicate")
+
+    fresh_inventory = inventory_sidecars(
+        repo_root=root,
+        sidecar_allowlist=sidecar_allowlist,
+        secret_salt=secret_salt,
+    )
+    stored_sources = {
+        source.get("source_id"): source
+        for source in stored_inventory["sources"]
+        if isinstance(source, dict) and isinstance(source.get("source_id"), str)
+    }
+    fresh_sources = {source["source_id"]: source for source in fresh_inventory["sources"]}
+    if set(stored_sources) != set(fresh_sources):
+        raise BenchmarkError("Sidecar allowlist does not match the sanitized inventory")
+    for source_id, fresh_source in fresh_sources.items():
+        stored_source = stored_sources[source_id]
+        if fresh_source["file_sha256"] != stored_source.get("file_sha256"):
+            raise BenchmarkError("Sidecar hash does not match the sanitized inventory")
+
+    paths_by_source_id: dict[str, Path] = {}
+    for requested in sidecar_allowlist:
+        candidate = requested if requested.is_absolute() else root / requested
+        source_id = sidecar_source_id(candidate, secret_salt)
+        if source_id in paths_by_source_id:
+            raise BenchmarkError("Sidecar allowlist contains a duplicate source")
+        paths_by_source_id[source_id] = candidate
+
+    current: dict[str, dict[str, Any]] = {}
+    current_provenance_counts: Counter[tuple[str, str, str]] = Counter()
+    for source in fresh_inventory["sources"]:
+        if source["source_status"] != "accepted":
+            continue
+        sidecar_path = paths_by_source_id[source["source_id"]]
+        for run in source["runs"]:
+            if not run["compatible"]:
+                continue
+            contract, candidates = load_benchmark_candidates(
+                sidecar_path,
+                secret_salt,
+                approved_source_id=source["source_id"],
+                approved_run_id=run["opaque_run_id"],
+            )
+            with contextlib.closing(open_sqlite_immutable(sidecar_path)) as connection:
+                raw_run_id = _resolve_approved_raw_run_id(
+                    connection,
+                    secret_salt=secret_salt,
+                    source_id=source["source_id"],
+                    approved_run_id=run["opaque_run_id"],
+                )
+                rows = connection.execute(
+                    """
+                    SELECT u.* FROM tagging_unit AS u
+                    JOIN tagging_job AS j ON j.unit_id = u.unit_id
+                    WHERE j.run_id = ? ORDER BY u.unit_id
+                    """,
+                    (raw_run_id,),
+                ).fetchall()
+            rows_by_unit = {str(row["unit_id"]): dict(row) for row in rows}
+            if len(rows_by_unit) != len(candidates):
+                raise BenchmarkError("Authoritative current run has ambiguous unit rows")
+            provenance = (
+                _safe_provenance_code(contract.prompt_version),
+                _safe_provenance_code(contract.schema_version),
+                _safe_provenance_code(contract.unit_strategy_version),
+            )
+            current_provenance_counts[provenance] += len(candidates)
+            for candidate in candidates:
+                row = rows_by_unit.get(candidate.source_unit_id)
+                if row is None:
+                    raise BenchmarkError("Authoritative current unit row is missing")
+                existing = current.get(candidate.opaque_hash)
+                if existing and (existing["candidate"] != candidate or existing["row"] != row):
+                    raise BenchmarkError("Authoritative current unit diagnostics conflict")
+                current[candidate.opaque_hash] = {"candidate": candidate, "row": row}
+    if not current:
+        raise BenchmarkError("No authoritative current planner-v3 candidates were found")
+
+    by_unit_lineage: defaultdict[tuple[Any, ...], list[str]] = defaultdict(list)
+    by_content_hash: defaultdict[tuple[Any, ...], list[str]] = defaultdict(list)
+    by_lineage: defaultdict[tuple[Any, ...], list[str]] = defaultdict(list)
+    by_context: defaultdict[str, list[str]] = defaultdict(list)
+    for candidate_id, item in current.items():
+        row = item["row"]
+        lineage = _stored_lineage_signature(row)
+        if lineage is None:
+            raise BenchmarkError("Authoritative current unit has unreadable lineage")
+        context_id = str(row["context_id"])
+        by_unit_lineage[(context_id, row["unit_id"], lineage)].append(candidate_id)
+        by_content_hash[(context_id, row["content_hash"])].append(candidate_id)
+        by_lineage[(context_id, lineage)].append(candidate_id)
+        by_context[context_id].append(candidate_id)
+
+    evidence = {
+        candidate_id: {
+            "concept_count": 0,
+            "relation_count": 0,
+            "relation_evidence_count": 0,
+            "generic_label_count": 0,
+            "duplicate_label_count": 0,
+            "generic_ratio": 0.0,
+            "duplicate_ratio": 0.0,
+            "historically_empty": False,
+            "historically_rejected": False,
+            "terminal_semantic_status_counts": Counter(),
+            "provenance": Counter(),
+            "mapping_reason_codes": Counter(),
+        }
+        for candidate_id in current
+    }
+    record_counts: Counter[str] = Counter()
+    excluded_reason_counts: Counter[str] = Counter()
+    mapping_reason_counts: Counter[str] = Counter()
+    terminal_semantic_status_counts: Counter[str] = Counter()
+    mapped_provenance_counts: Counter[tuple[str, str, str, str]] = Counter()
+
+    for source in fresh_inventory["sources"]:
+        if source["source_status"] != "accepted":
+            continue
+        sidecar_path = paths_by_source_id[source["source_id"]]
+        with contextlib.closing(open_sqlite_immutable(sidecar_path)) as connection:
+            run_columns = _table_columns(connection, "tagging_run")
+            job_columns = _table_columns(connection, "tagging_job")
+            unit_columns = _table_columns(connection, "tagging_unit")
+            required_run = {
+                "run_id",
+                "prompt_version",
+                "schema_version",
+                "unit_strategy_version",
+            }
+            required_job = {"run_id", "unit_id", "status", "output_json", "error_code"}
+            required_unit = {
+                "unit_id",
+                "context_id",
+                "content_hash",
+                "segments_json",
+            }
+            if not required_run <= run_columns or not required_job <= job_columns:
+                count = int(connection.execute("SELECT COUNT(*) FROM tagging_job").fetchone()[0])
+                record_counts["total"] += count
+                excluded_reason_counts["historical_sidecar_schema_unsupported"] += count
+                continue
+            if not required_unit <= unit_columns:
+                count = int(connection.execute("SELECT COUNT(*) FROM tagging_job").fetchone()[0])
+                record_counts["total"] += count
+                excluded_reason_counts["historical_lineage_schema_unsupported"] += count
+                continue
+            runs = connection.execute(
+                "SELECT run_id, prompt_version, schema_version, unit_strategy_version "
+                "FROM tagging_run ORDER BY run_id"
+            ).fetchall()
+            for run_row in runs:
+                rows = connection.execute(
+                    """
+                    SELECT u.*, j.status, j.output_json, j.error_code
+                    FROM tagging_job AS j
+                    LEFT JOIN tagging_unit AS u ON u.unit_id = j.unit_id
+                    WHERE j.run_id = ? ORDER BY j.unit_id
+                    """,
+                    (run_row["run_id"],),
+                ).fetchall()
+                prompt_code = _safe_provenance_code(run_row["prompt_version"])
+                schema_code = _safe_provenance_code(run_row["schema_version"])
+                planner_code = _safe_provenance_code(run_row["unit_strategy_version"])
+                equivalence_code = (
+                    "current_prompt_version"
+                    if run_row["prompt_version"] == PROMPT_VERSION
+                    else "historical_prompt_version_not_provider_equivalent"
+                )
+                provenance = (prompt_code, schema_code, planner_code, equivalence_code)
+                for sqlite_row in rows:
+                    row = dict(sqlite_row)
+                    record_counts["total"] += 1
+                    status = row.get("status")
+                    if status not in TERMINAL_JOB_STATUSES:
+                        excluded_reason_counts["historical_status_nonterminal"] += 1
+                        continue
+                    record_counts["terminal"] += 1
+                    if run_row["schema_version"] != SCHEMA_VERSION:
+                        excluded_reason_counts["historical_stored_schema_unsupported"] += 1
+                        continue
+                    if status == "failed":
+                        if row.get("error_code") not in _VALIDATION_REJECTION_CODES:
+                            excluded_reason_counts[
+                                "historical_runtime_transport_or_infrastructure_failure"
+                            ] += 1
+                            terminal_semantic_status_counts[
+                                "runtime_transport_or_infrastructure_excluded"
+                            ] += 1
+                            continue
+                        diagnostics = {
+                            "concept_count": 0,
+                            "relation_count": 0,
+                            "relation_evidence_count": 0,
+                            "historically_empty": False,
+                            "historically_rejected": True,
+                            "generic_label_count": 0,
+                            "duplicate_label_count": 0,
+                        }
+                        semantic_status = "validation_rejected"
+                    else:
+                        try:
+                            diagnostics = _historical_output_diagnostics(sqlite_row)
+                        except BenchmarkError:
+                            excluded_reason_counts["historical_stored_output_schema_invalid"] += 1
+                            terminal_semantic_status_counts["stored_output_invalid_excluded"] += 1
+                            continue
+                        semantic_status = (
+                            "done_empty" if diagnostics["historically_empty"] else "done_meaningful"
+                        )
+                    candidate_id, mapping_reason = _historical_record_mapping(
+                        row,
+                        by_unit_lineage=by_unit_lineage,
+                        by_content_hash=by_content_hash,
+                        by_lineage=by_lineage,
+                        by_context=by_context,
+                    )
+                    if candidate_id is None:
+                        excluded_reason_counts[mapping_reason] += 1
+                        continue
+                    record_counts["mapped"] += 1
+                    mapping_reason_counts[mapping_reason] += 1
+                    terminal_semantic_status_counts[semantic_status] += 1
+                    mapped_provenance_counts[provenance] += 1
+                    target = evidence[candidate_id]
+                    concept_count = int(diagnostics["concept_count"])
+                    generic_count = int(diagnostics["generic_label_count"])
+                    duplicate_count = int(diagnostics["duplicate_label_count"])
+                    target["concept_count"] = max(target["concept_count"], concept_count)
+                    target["relation_count"] = max(
+                        target["relation_count"], int(diagnostics["relation_count"])
+                    )
+                    target["relation_evidence_count"] = max(
+                        target["relation_evidence_count"],
+                        int(diagnostics["relation_evidence_count"]),
+                    )
+                    target["generic_label_count"] = max(
+                        target["generic_label_count"], generic_count
+                    )
+                    target["duplicate_label_count"] = max(
+                        target["duplicate_label_count"], duplicate_count
+                    )
+                    if concept_count:
+                        target["generic_ratio"] = max(
+                            target["generic_ratio"], generic_count / concept_count
+                        )
+                        target["duplicate_ratio"] = max(
+                            target["duplicate_ratio"], duplicate_count / concept_count
+                        )
+                    target["historically_empty"] |= bool(diagnostics["historically_empty"])
+                    target["historically_rejected"] |= bool(diagnostics["historically_rejected"])
+                    target["terminal_semantic_status_counts"][semantic_status] += 1
+                    target["provenance"][provenance] += 1
+                    target["mapping_reason_codes"][mapping_reason] += 1
+
+    audited_candidates: list[BenchmarkCandidate] = []
+    for candidate_id, item in current.items():
+        candidate = item["candidate"]
+        historical = evidence[candidate_id]
+        diagnostics = replace(
+            candidate.diagnostics,
+            relation_count=historical["relation_count"],
+            relation_evidence_count=historical["relation_evidence_count"],
+            historically_empty=historical["historically_empty"],
+            historically_rejected=historical["historically_rejected"],
+            generic_label_count=historical["generic_label_count"],
+            duplicate_label_count=historical["duplicate_label_count"],
+        )
+        audited_candidates.append(replace(candidate, diagnostics=diagnostics))
+    audited_candidates.sort(key=lambda candidate: candidate.opaque_hash)
+
+    prompt_sizes = [
+        candidate.diagnostics.estimated_prompt_tokens for candidate in audited_candidates
+    ]
+    ordinary_lower = _nearest_rank(prompt_sizes, 0.25)
+    ordinary_upper = _nearest_rank(prompt_sizes, 0.75)
+    qualifications = {
+        candidate.opaque_hash: _qualification_reason_codes(
+            candidate, ordinary_lower, ordinary_upper
+        )
+        for candidate in audited_candidates
+    }
+    pool_sizes = {
+        category: sum(category in reasons for reasons in qualifications.values())
+        for category in CATEGORY_PRIORITY
+    }
+    used: set[str] = set()
+    category_feasibility: dict[str, dict[str, Any]] = {}
+    for category in CATEGORY_PRIORITY:
+        eligible = [
+            candidate
+            for candidate in audited_candidates
+            if candidate.opaque_hash not in used
+            and category in qualifications[candidate.opaque_hash]
+        ]
+        eligible.sort(key=lambda candidate: _category_sort_key(category, candidate))
+        allocated = eligible[:CASES_PER_CATEGORY]
+        used.update(candidate.opaque_hash for candidate in allocated)
+        category_feasibility[category] = {
+            "priority_available_count": len(eligible),
+            "at_least_two_mutually_allocatable": len(eligible) >= CASES_PER_CATEGORY,
+        }
+    quota_coverage = all(
+        pool_sizes[category] >= CASES_PER_CATEGORY for category in CATEGORY_PRIORITY
+    )
+    overlap_resolvable = all(
+        category_feasibility[category]["at_least_two_mutually_allocatable"]
+        for category in CATEGORY_PRIORITY
+        if pool_sizes[category] >= CASES_PER_CATEGORY
+    )
+
+    companion_state_counts: Counter[str] = Counter()
+    source_reason_counts: Counter[str] = Counter()
+    for source in fresh_inventory["sources"]:
+        for companion, state in source["companion_files"].items():
+            companion_state_counts[f"{companion}_{state}"] += 1
+        source_reason_counts.update(source["source_reason_codes"])
+    excluded_reason_counts["historical_records_excluded"] = (
+        record_counts["total"] - record_counts["mapped"]
+    )
+
+    candidate_rows = []
+    for candidate in audited_candidates:
+        historical = evidence[candidate.opaque_hash]
+        candidate_rows.append(
+            {
+                "opaque_candidate_id": candidate.opaque_hash,
+                "source_provenance_hash": candidate.provenance_hash,
+                "planner_diagnostics": {
+                    "planned_chunk_count": candidate.diagnostics.planned_chunk_count,
+                    "estimated_prompt_tokens": candidate.diagnostics.estimated_prompt_tokens,
+                    "prompt_limit": candidate.diagnostics.prompt_limit,
+                },
+                "historical_semantic_diagnostics": {
+                    "concept_count": historical["concept_count"],
+                    "relation_count": historical["relation_count"],
+                    "relation_evidence_count": historical["relation_evidence_count"],
+                    "generic_label_count": historical["generic_label_count"],
+                    "duplicate_label_count": historical["duplicate_label_count"],
+                    "generic_ratio": round(historical["generic_ratio"], 6),
+                    "duplicate_ratio": round(historical["duplicate_ratio"], 6),
+                    "terminal_semantic_status_counts": dict(
+                        sorted(historical["terminal_semantic_status_counts"].items())
+                    ),
+                },
+                "category_eligibility_reason_codes": [
+                    qualifications[candidate.opaque_hash][category]
+                    for category in CATEGORY_PRIORITY
+                    if category in qualifications[candidate.opaque_hash]
+                ],
+                "lineage_mapping_reason_counts": dict(
+                    sorted(historical["mapping_reason_codes"].items())
+                ),
+            }
+        )
+
+    report = {
+        "evidence_inventory_version": HISTORICAL_EVIDENCE_VERSION,
+        "deterministic_hashes": {
+            "audit_configuration_sha256": _historical_evidence_configuration_hash(),
+            "sanitized_inventory_sha256": hashlib.sha256(inventory_bytes).hexdigest(),
+            "current_candidate_set_sha256": sha256_json(
+                [candidate.opaque_hash for candidate in audited_candidates]
+            ),
+        },
+        "protected_databases": [report for _, report in protected_before],
+        "sidecar_safety_counts": {
+            "sidecar_count": fresh_inventory["sidecar_count"],
+            "safe_sidecar_count": (
+                fresh_inventory["sidecar_count"] - fresh_inventory["unsafe_sidecar_count"]
+            ),
+            "unsafe_sidecar_count": fresh_inventory["unsafe_sidecar_count"],
+            "sqlite_integrity_ok_count": sum(
+                source["sqlite_integrity"] == "ok" for source in fresh_inventory["sources"]
+            ),
+            "source_reason_counts": dict(sorted(source_reason_counts.items())),
+            "companion_state_counts": dict(sorted(companion_state_counts.items())),
+        },
+        "current_planner_provenance_counts": [
+            {
+                "prompt_version_code": provenance[0],
+                "schema_version_code": provenance[1],
+                "planner_strategy_code": provenance[2],
+                "candidate_count": count,
+            }
+            for provenance, count in sorted(current_provenance_counts.items())
+        ],
+        "current_candidate_pool_count": len(audited_candidates),
+        "historical_record_counts": {
+            "total": record_counts["total"],
+            "terminal": record_counts["terminal"],
+            "mapped_deterministically": record_counts["mapped"],
+            "excluded": record_counts["total"] - record_counts["mapped"],
+        },
+        "historical_excluded_reason_counts": {
+            key: value
+            for key, value in sorted(excluded_reason_counts.items())
+            if key != "historical_records_excluded"
+        },
+        "lineage_mapping_reason_counts": dict(sorted(mapping_reason_counts.items())),
+        "terminal_semantic_status_counts": dict(sorted(terminal_semantic_status_counts.items())),
+        "mapped_historical_provenance_counts": [
+            {
+                "prompt_version_code": provenance[0],
+                "schema_version_code": provenance[1],
+                "planner_strategy_code": provenance[2],
+                "prompt_equivalence_code": provenance[3],
+                "record_count": count,
+            }
+            for provenance, count in sorted(mapped_provenance_counts.items())
+        ],
+        "ordinary_prompt_percentile_diagnostics": {
+            "p25": ordinary_lower,
+            "p75": ordinary_upper,
+        },
+        "candidate_pool_counts": pool_sizes,
+        "category_feasibility": category_feasibility,
+        "all_category_quotas_have_two_candidates": quota_coverage,
+        "overlap_resolvable_with_existing_priority_order": overlap_resolvable,
+        "decision_code": "GO" if quota_coverage and overlap_resolvable else "NO-GO",
+        "candidates": candidate_rows,
+    }
+
+    repeated_inventory = inventory_sidecars(
+        repo_root=root,
+        sidecar_allowlist=sidecar_allowlist,
+        secret_salt=secret_salt,
+    )
+    if repeated_inventory != fresh_inventory:
+        raise BenchmarkError("Sidecar runtime state changed during historical audit")
+    protected_after = [_protected_database_state(path, secret_salt) for path, _ in protected_before]
+    if [item for _, item in protected_after] != [item for _, item in protected_before]:
+        raise BenchmarkError("Protected database changed during historical audit")
+    _write_new_json(output, report)
+    return report
 
 
 _FIELD_CATEGORY_PARTS: tuple[tuple[str, tuple[str, ...]], ...] = (

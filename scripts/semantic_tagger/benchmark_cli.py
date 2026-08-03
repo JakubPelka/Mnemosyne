@@ -9,6 +9,7 @@ from pathlib import Path
 from scripts.semantic_tagger.benchmark import (
     BenchmarkError,
     INVENTORY_PATH,
+    audit_historical_evidence,
     prepare_benchmark_artifacts,
     read_local_benchmark_salt,
     write_sidecar_inventory,
@@ -37,6 +38,16 @@ def build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--approved-source-id", required=True)
     prepare.add_argument("--approved-run-id", required=True)
     prepare.add_argument("--repo-root", type=Path, default=Path.cwd())
+
+    evidence = subparsers.add_parser(
+        "evidence-audit", help="Audit historical evidence without selecting cases"
+    )
+    evidence.add_argument("--sidecar", dest="sidecars", type=Path, action="append", required=True)
+    evidence.add_argument(
+        "--protected-db", dest="protected_databases", type=Path, action="append", required=True
+    )
+    evidence.add_argument("--salt-file", type=Path, required=True)
+    evidence.add_argument("--repo-root", type=Path, default=Path.cwd())
     return parser
 
 
@@ -50,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
                 sidecar_allowlist=args.sidecars,
                 secret_salt=secret_salt,
             )
-        else:
+        elif args.command == "prepare":
             results = prepare_benchmark_artifacts(
                 repo_root=args.repo_root,
                 sidecar_path=args.sidecar,
@@ -58,6 +69,13 @@ def main(argv: list[str] | None = None) -> int:
                 secret_salt=secret_salt,
                 approved_source_id=args.approved_source_id,
                 approved_run_id=args.approved_run_id,
+            )
+        else:
+            report = audit_historical_evidence(
+                repo_root=args.repo_root,
+                sidecar_allowlist=args.sidecars,
+                protected_databases=args.protected_databases,
+                secret_salt=secret_salt,
             )
     except BenchmarkError:
         print("checkpoint_error=bounded_offline_operation_failed", file=sys.stderr)
@@ -79,6 +97,22 @@ def main(argv: list[str] | None = None) -> int:
                         f"done={counts['done']} failed={counts['failed']}"
                     )
         print(f"inventory_path={INVENTORY_PATH.as_posix()}")
+        return 0
+    if args.command == "evidence-audit":
+        counts = report["historical_record_counts"]
+        print(f"historical_records_mapped={counts['mapped_deterministically']}")
+        print(f"historical_records_excluded={counts['excluded']}")
+        for reason_code, count in report["historical_excluded_reason_counts"].items():
+            print(f"excluded_{reason_code}={count}")
+        for category in report["candidate_pool_counts"]:
+            print(f"pool_{category}={report['candidate_pool_counts'][category]}")
+            allocatable = report["category_feasibility"][category][
+                "at_least_two_mutually_allocatable"
+            ]
+            print(f"allocatable_{category}={'yes' if allocatable else 'no'}")
+        resolvable = report["overlap_resolvable_with_existing_priority_order"]
+        print(f"priority_overlap_resolvable={'yes' if resolvable else 'no'}")
+        print(f"decision={report['decision_code']}")
         return 0
     print(f"selected_cases={results['selected_cases']}")
     print(f"pending_human_reviews={results['pending_human_reviews']}")

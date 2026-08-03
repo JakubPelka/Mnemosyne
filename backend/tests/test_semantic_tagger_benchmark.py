@@ -9,12 +9,14 @@ import pytest
 
 from scripts.semantic_tagger.benchmark import (
     CATEGORY_PRIORITY,
+    HISTORICAL_EVIDENCE_PATH,
     HUMAN_REVIEW_PREVIEW_VERSION,
     INVENTORY_PATH,
     BenchmarkError,
     BenchmarkQuotaError,
     CandidateDiagnostics,
     RunContract,
+    audit_historical_evidence,
     anonymize_structure,
     build_redaction_report,
     build_safe_manifest,
@@ -30,6 +32,7 @@ from scripts.semantic_tagger.benchmark import (
     select_benchmark_cases,
     sidecar_source_id,
     verify_ignored_local_output,
+    write_sidecar_inventory,
 )
 from scripts.semantic_tagger.benchmark_cli import main as benchmark_cli_main
 from scripts.semantic_tagger.prompt_budget import (
@@ -352,7 +355,7 @@ def _stored_output(labels, relations=()):
 
 
 def _create_synthetic_databases(root: Path) -> tuple[Path, Path]:
-    sidecar = root / "synthetic-sidecar.sqlite3"
+    sidecar = root / "semantic_tagger_synthetic.local.sqlite3"
     main_db = root / "synthetic-main.sqlite3"
     settings = json.dumps(
         {
@@ -947,6 +950,89 @@ def test_inventory_cli_writes_only_sanitized_ignored_output(tmp_path, capsys):
         ).returncode
         == 0
     )
+
+
+def test_historical_evidence_audit_maps_validated_history_and_excludes_runtime_failures(
+    tmp_path,
+):
+    _init_git_repo(tmp_path)
+    sidecar, main_db = _create_synthetic_databases(tmp_path)
+    local_root = tmp_path / ".local" / "semantic_tagger_benchmark"
+    local_root.mkdir(parents=True)
+    salt_file = local_root / "selector_salt.local"
+    salt_file.write_bytes(SALT)
+    with contextlib.closing(sqlite3.connect(sidecar)) as connection, connection:
+        connection.execute(
+            "INSERT INTO tagging_run VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "historical-run",
+                "2026-08-02T00:00:00",
+                "semantic-hybrid-v2",
+                "semantic-tags-v3",
+                "unit-v2-whole-events",
+                "qwen3:14b",
+                "{}",
+            ),
+        )
+        connection.execute(
+            "INSERT INTO tagging_job VALUES (?, ?, ?, ?, ?)",
+            (
+                "historical-run",
+                "unit-11",
+                "done",
+                json.dumps(_stored_output(["system"])),
+                None,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO tagging_job VALUES (?, ?, ?, ?, ?)",
+            ("historical-run", "unit-12", "failed", "{}", "ollama_error"),
+        )
+
+    before = {path: file_sha256(path) for path in (sidecar, main_db)}
+    write_sidecar_inventory(
+        repo_root=tmp_path,
+        sidecar_allowlist=[sidecar],
+        secret_salt=SALT,
+    )
+    report = audit_historical_evidence(
+        repo_root=tmp_path,
+        sidecar_allowlist=[sidecar],
+        protected_databases=[main_db],
+        secret_salt=SALT,
+    )
+
+    assert report["historical_record_counts"] == {
+        "total": 14,
+        "terminal": 14,
+        "mapped_deterministically": 13,
+        "excluded": 1,
+    }
+    assert report["historical_excluded_reason_counts"] == {
+        "historical_runtime_transport_or_infrastructure_failure": 1
+    }
+    assert report["candidate_pool_counts"]["problematic_or_generic_labels"] == 3
+    assert any(
+        item["prompt_equivalence_code"] == "historical_prompt_version_not_provider_equivalent"
+        for item in report["mapped_historical_provenance_counts"]
+    )
+    assert "selected_cases" not in report
+    assert {path: file_sha256(path) for path in (sidecar, main_db)} == before
+    assert not any(
+        Path(f"{path}{suffix}").exists()
+        for path in (sidecar, main_db)
+        for suffix in ("-wal", "-shm")
+    )
+    serialized = (tmp_path / HISTORICAL_EVIDENCE_PATH).read_text(encoding="utf-8")
+    for forbidden in (
+        "historical-run",
+        "unit-11",
+        "unit-12",
+        "system",
+        "ollama_error",
+        str(tmp_path),
+    ):
+        assert forbidden not in serialized
 
 
 def test_future_selector_requires_matching_explicit_opaque_approvals(tmp_path):
