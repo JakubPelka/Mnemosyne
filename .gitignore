@@ -33,6 +33,7 @@ chat.html
 /embeddings/
 /indexes/
 /logs/
+/.local/
 
 # Secrets and local configuration
 .env
