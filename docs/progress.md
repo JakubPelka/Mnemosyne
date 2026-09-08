@@ -2,6 +2,21 @@
 
 Ten dokument jest zwięzłym dziennikiem logicznych bloków prac. Szczegółowe raporty powstają tylko dla kamieni milowych, większych migracji, zmian architektury i audytów bezpieczeństwa.
 
+## 2026-07-20 — Synchronizacja README ze stanem gałęzi semantic taggera
+
+### Wykonane zadania
+
+- uzupełniono główny README o aktualny status eksperymentalnego, lokalnego
+  pipeline'u semantic taggera;
+- jawnie oddzielono rozwijaną funkcję na gałęzi
+  `feat/local-llm-semantic-tagger` od stabilnego Visual MVP na `main`;
+- nie opisano lokalnych danych, wyników, ścieżek ani nieśledzonych skryptów.
+
+### Weryfikacja i następny krok
+
+- zmiana jest wyłącznie dokumentacyjna i wymaga kontroli `git diff --check`;
+- przed scaleniem funkcji nadal obowiązuje pełna walidacja i audyt prywatności.
+
 ## 2026-07-14 — Korekta modelu po regresji Topic Quality
 
 ### Wykonane zadania

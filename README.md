@@ -84,4 +84,10 @@ Importer przyjmuje również rozpakowany katalog. Domyślna baza `data/mnemosyne
 
 Budowa analizy działa całkowicie lokalnie i wypisuje wyłącznie liczniki — nie nazwy tematów ani treść wiadomości. Wiadomości są najpierw dzielone na segmenty, dzięki czemu kod, komendy i logi pozostają wyszukiwalne, ale nie zasilają głównej analizy tematów. Surowe kandydaty pozostają w bazie wraz z oceną jakości; domyślny widok „Terminy” zachowuje eksplorację Visual MVP, a osobny widok „Tematy (beta)” pokazuje wyłącznie jednostki zgrupowane lub zatwierdzone. Bezpieczny przykład ręcznych aliasów znajduje się w `sample_data/topic_overrides.example.yaml`; prawdziwe mapowania można zapisać w ignorowanym `data/local_topic_overrides.yaml`.
 
+Na gałęzi `feat/local-llm-semantic-tagger` rozwijany jest eksperymentalny,
+całkowicie lokalny pipeline semantycznego tagowania z audytowalnymi zadaniami,
+wznawianiem pracy, ograniczonymi sidecarami i obsługą lokalnego modelu przez
+Ollama. Funkcja nie jest jeszcze częścią stabilnego Visual MVP ani gałęzi
+`main`; jej stan i wyniki walidacji są prowadzone w `docs/progress.md`.
+
 Szczegóły projektu znajdują się w [`docs/architecture.md`](docs/architecture.md), a zasady bezpieczeństwa w [`docs/privacy.md`](docs/privacy.md).
